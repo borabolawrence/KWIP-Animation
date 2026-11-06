@@ -1,0 +1,73 @@
+node_modules/
+dist/
+*.zip
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+auth.json
+
+# Operating system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.sublime-workspace
+*.swp
+*.swo
+
+# Logs and debugging
+*.log
+error_log
+debug.log
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*~
+
+# PHP tooling caches
+.phpunit.cache/
+.phpunit.result.cache
+.php-cs-fixer.cache
+.phpactor.json
+
+# Dependency managers
+/vendor/
+!/vendor/
+!/vendor/**
+
+# Node.js tooling (if used)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Build and test output (if generated)
+coverage/
+.nyc_output/
+
+# Generated plugin packages
+*.zip
+
+# Local test WordPress installation (if present)
+/wordpress/
+/wp-admin/
+/wp-includes/
+/wp-content/uploads/
+wp-config.php
