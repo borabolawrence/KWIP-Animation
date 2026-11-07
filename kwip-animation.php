@@ -5,7 +5,7 @@
  * Version:           1.0.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
- * Author:            Lawrence
+ * Author:            Kiyouh.
  * License:           GPL-2.0-or-later
  * Text Domain:       kwip-animation
  */
@@ -23,8 +23,10 @@ require_once KWIPA_PATH . 'includes/class-kwip-config.php';
 require_once KWIPA_PATH . 'includes/class-kwip-rest.php';
 require_once KWIPA_PATH . 'includes/class-kwip-assets.php';
 require_once KWIPA_PATH . 'includes/class-kwip-admin.php';
+require_once KWIPA_PATH . 'includes/class-kwip-frontend.php';
 
 register_activation_hook( KWIPA_FILE, array( 'KWIPA_Config', 'on_activate' ) );
 
 KWIPA_REST::init();
 KWIPA_Admin::init();
+KWIPA_Frontend::init();

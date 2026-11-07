@@ -1,0 +1,350 @@
+.toplevel_page_kwip-animation #wpcontent {
+    padding-left: 0;
+}
+
+.toplevel_page_kwip-animation #wpbody-content {
+    padding-bottom: 0;
+}
+
+.toplevel_page_kwip-animation #wpfooter {
+    display: none;
+}
+
+.kwipa-wrap {
+    margin: 0;
+}
+
+.kwipa-app {
+    --kwipa-accent: var(--wp-admin-theme-color, #2271b1);
+    --kwipa-border: #dcdcde;
+    --kwipa-muted: #646970;
+    display: grid;
+    grid-template-columns: 380px minmax(0, 1fr);
+    height: calc(100vh - 32px);
+    min-height: 520px;
+    background: #f0f0f1;
+    color: #1d2327;
+}
+
+.kwipa-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    overflow-y: auto;
+    background: #fff;
+    border-right: 1px solid var(--kwipa-border);
+}
+
+.kwipa-head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.kwipa-head h1 {
+    margin: 0;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1.3;
+}
+
+.kwipa-head-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 8px;
+}
+
+.kwipa-head-actions .button-primary {
+    margin-left: auto;
+}
+
+.kwipa-chip {
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--kwipa-muted);
+    background: #f0f0f1;
+    border-radius: 10px;
+}
+
+.kwipa-chip.is-dirty {
+    color: #8a4b00;
+    background: #fcf0d6;
+}
+
+.kwipa-section h2 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--kwipa-muted);
+}
+
+.kwipa-selector {
+    display: block;
+    padding: 6px 8px;
+    font-size: 12px;
+    word-break: break-all;
+    background: #f6f7f7;
+    border: 1px solid var(--kwipa-border);
+    border-radius: 3px;
+}
+
+.kwipa-label {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--kwipa-muted);
+}
+
+.kwipa-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--kwipa-muted);
+}
+
+.kwipa-notice {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    border-left: 4px solid var(--kwipa-accent);
+    background: #f0f6fc;
+}
+
+.kwipa-notice.is-error {
+    border-color: #d63638;
+    background: #fcf0f1;
+}
+
+.kwipa-notice.is-success {
+    border-color: #00a32a;
+    background: #edfaef;
+}
+
+.kwipa-notice-x {
+    padding: 0 4px;
+    font-size: 16px;
+    line-height: 1;
+    color: inherit;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.kwipa-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border-bottom: 1px solid var(--kwipa-border);
+}
+
+.kwipa-tab {
+    position: relative;
+    padding: 8px 4px;
+    font-size: 12px;
+    color: var(--kwipa-muted);
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+}
+
+.kwipa-tab.is-active {
+    color: var(--kwipa-accent);
+    border-bottom-color: var(--kwipa-accent);
+    font-weight: 600;
+}
+
+.kwipa-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    background: #00a32a;
+    border-radius: 50%;
+}
+
+.kwipa-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.kwipa-toggle,
+.kwipa-auto {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.kwipa-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.kwipa-field input,
+.kwipa-field select {
+    width: 100%;
+    max-width: none;
+}
+
+.kwipa-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.kwipa-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.kwipa-auto {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--kwipa-muted);
+}
+
+.kwipa-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.kwipa-item {
+    display: flex;
+    border: 1px solid var(--kwipa-border);
+    border-radius: 3px;
+}
+
+.kwipa-item.is-active {
+    border-color: var(--kwipa-accent);
+    background: #f0f6fc;
+}
+
+.kwipa-item-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px;
+    text-align: left;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.kwipa-item-main code {
+    padding: 0;
+    font-size: 12px;
+    background: none;
+    word-break: break-all;
+}
+
+.kwipa-badges {
+    display: flex;
+    gap: 4px;
+}
+
+.kwipa-badge {
+    padding: 0 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--kwipa-muted);
+    background: #f0f0f1;
+    border-radius: 8px;
+}
+
+.kwipa-item-del {
+    padding: 0 10px;
+    font-size: 16px;
+    color: #b32d2e;
+    background: none;
+    border: 0;
+    border-left: 1px solid var(--kwipa-border);
+    cursor: pointer;
+}
+
+.kwipa-stage {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+.kwipa-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #fff;
+    border-bottom: 1px solid var(--kwipa-border);
+}
+
+.kwipa-bar input[type="text"] {
+    flex: 1;
+    max-width: 420px;
+}
+
+.kwipa-status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--kwipa-muted);
+}
+
+.kwipa-status.is-ready {
+    color: #007017;
+}
+
+.kwipa-status.is-silent {
+    color: #b32d2e;
+}
+
+.kwipa-frame {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background: #fff;
+}
+
+.kwipa-blocked {
+    max-width: 480px;
+    margin: 48px auto;
+    padding: 0 16px;
+}
+
+@media (max-width: 960px) {
+    .kwipa-app {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+
+    .kwipa-sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--kwipa-border);
+    }
+
+    .kwipa-stage {
+        height: 70vh;
+    }
+}
+
+@media (max-width: 782px) {
+    .kwipa-app {
+        min-height: 0;
+    }
+}

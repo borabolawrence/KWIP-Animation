@@ -1,8 +1,9 @@
 /**
  * KWIP Animation - Inspector Bridge
  *
- * Runs ONLY inside the builder iframe (Step 3 enqueues it there; the public
- * site never loads this file).
+ * Runs ONLY inside the builder iframe (KWIPA_Admin enqueues it there; the public
+ * site never loads this file). Depends on kwip-engine.js, which owns the preset
+ * table and the tween logic, so a preview here runs the same code as the live site.
  *
  * Messages iframe -> parent (all carry source: 'kwipa-inspector'):
  *   ready           { gsap, scrollTrigger }
@@ -16,7 +17,7 @@
  *   preview   { selector, trigger, settings: { animation, duration, delay } }
  *   clear     { selector? }                -> kill previews, restore elements
  *
- * Config (optional, printed by PHP before this file):
+ * Config (printed by PHP before this file):
  *   window.KWIPABridgeConfig = { parentOrigin: 'https://example.com' }
  */
 (function () {
@@ -33,33 +34,12 @@
     const MSG_IN = 'kwipa-builder';
     const TRIGGERS = ['load', 'hover', 'scroll', 'click'];
     const MAX_LEN = 255;
+    const Engine = window.KWIPAEngine;
 
     const SELECTOR_OK = /^[\p{L}\p{N}_\-#.>+~:()*\\\/ ]+$/u;
 
     const STATE_CLASS = /^(active|current|open|opened|show|shown|hide|hidden|visible|hover|focus|focused|selected|disabled|loading|loaded|ready|animated|in-?view|is-[\w-]+|aos-[\w-]+|kwipa-[\w-]+)$/i;
     const UNSTABLE = /\d{5,}|^(css|sc|jsx|svelte|emotion|styled)-[a-z0-9]+$/i;
-
-    /**
-     * Animation presets. Slugs must match KWIPA_Config::allowed_animations().
-     *   entrance: animates FROM the given state TO the element's natural state.
-     *   effect:   animates from natural TO the given state (legs > 1 = yoyo back).
-     *   hold:     on hover, stays in the target state until mouseleave.
-     */
-    const PRESETS = {
-        'fade-in': { kind: 'entrance', from: { opacity: 0 } },
-        'fade-up': { kind: 'entrance', from: { opacity: 0, y: 40 } },
-        'fade-down': { kind: 'entrance', from: { opacity: 0, y: -40 } },
-        'fade-left': { kind: 'entrance', from: { opacity: 0, x: 40 } },
-        'fade-right': { kind: 'entrance', from: { opacity: 0, x: -40 } },
-        'scale-up': { kind: 'effect', to: { scale: 1.1 }, legs: 2, hold: true },
-        'scale-down': { kind: 'effect', to: { scale: 0.9 }, legs: 2, hold: true },
-        'pulse': { kind: 'effect', to: { scale: 1.12 }, legs: 4 },
-        'spin': { kind: 'effect', to: { rotation: '+=360' }, ease: 'power2.inOut' },
-        'flip-x': { kind: 'effect', to: { rotationX: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
-        'flip-y': { kind: 'effect', to: { rotationY: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
-        'shake': { kind: 'effect', keyframes: { x: [-10, 10, -8, 8, -4, 4, 0], easeEach: 'sine.inOut' } },
-    };
-
 
     function post(payload) {
         payload.source = MSG_OUT;
@@ -73,7 +53,6 @@
     function fail(code, message) {
         post({ type: 'error', code, message });
     }
-
 
     function esc(value) {
         return (window.CSS && CSS.escape) ? CSS.escape(value) : value.replace(/[^\w-]/g, '\\$&');
@@ -234,14 +213,6 @@
         return text;
     }
 
-    /* ------------------------------------------------------------------ *
-     * Highlight overlay
-     * A shadow-DOM overlay instead of an outline on the target element: it
-     * never mutates the page's classes/styles (so it cannot disturb selectors
-     * or fight GSAP transforms), it can't be clipped by overflow:hidden
-     * ancestors, and site CSS cannot restyle it.
-     * ------------------------------------------------------------------ */
-
     let hoverBox, selectBox, label;
     let hoverEl = null;
     let selectedEl = null;
@@ -357,18 +328,8 @@
         }
     }
 
-
     const registry = new Map();
     let originalStyles = new WeakMap();
-
-    function num(value, fallback, min, max) {
-        const n = Number(value);
-        return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
-    }
-
-    function propsOf(preset) {
-        return Object.keys(preset.from || preset.to || preset.keyframes).filter((k) => k !== 'easeEach').join(',');
-    }
 
     function remember(el) {
         if (!originalStyles.has(el)) {
@@ -387,36 +348,6 @@
                 el.setAttribute('style', saved);
             }
         }
-    }
-
-    function runEntrance(els, preset, duration, delay, extra) {
-        const props = propsOf(preset);
-        window.gsap.killTweensOf(els, props);
-        window.gsap.set(els, { clearProps: props });
-        return window.gsap.from(els, Object.assign({}, preset.from, { duration, delay, ease: preset.ease || 'power2.out' }, extra));
-    }
-
-    function runEffect(els, preset, duration, delay, extra) {
-        const vars = { duration, delay, ease: preset.ease || 'power1.inOut', overwrite: 'auto' };
-
-        if (preset.keyframes) {
-            vars.keyframes = preset.keyframes;
-            vars.ease = 'none';
-        } else {
-            Object.assign(vars, preset.to);
-            if (preset.legs) {
-                vars.duration = duration / preset.legs;
-                vars.repeat = preset.legs - 1;
-                vars.yoyo = true;
-            }
-        }
-        return window.gsap.to(els, Object.assign(vars, extra));
-    }
-
-    function play(els, preset, duration, delay, extra) {
-        return preset.kind === 'entrance'
-            ? runEntrance(els, preset, duration, delay, extra)
-            : runEffect(els, preset, duration, delay, extra);
     }
 
     function teardown(key) {
@@ -448,16 +379,15 @@
 
     function runPreview(msg) {
         const gsap = window.gsap;
-        if (!gsap) {
-            fail('gsap_missing', 'GSAP is not loaded in the preview frame.');
+        if (!gsap || !Engine) {
+            fail('gsap_missing', 'GSAP or the KWIP engine is not loaded in the preview frame.');
             return;
         }
 
         const settings = (msg.settings && typeof msg.settings === 'object') ? msg.settings : {};
-        const name = typeof settings.animation === 'string' ? settings.animation : '';
-        const preset = Object.prototype.hasOwnProperty.call(PRESETS, name) ? PRESETS[name] : null;
+        const r = Engine.resolve(settings);
 
-        if (TRIGGERS.indexOf(msg.trigger) === -1 || !preset) {
+        if (TRIGGERS.indexOf(msg.trigger) === -1 || !r) {
             fail('invalid_preview', 'Unknown trigger or animation preset.');
             return;
         }
@@ -468,8 +398,6 @@
             return;
         }
 
-        const duration = num(settings.duration, 1, 0, 30);
-        const delay = num(settings.delay, 0, 0, 30);
         const key = msg.selector + '|' + msg.trigger;
 
         teardown(key);
@@ -479,67 +407,46 @@
         els.forEach(remember);
 
         if (msg.trigger === 'load' || msg.trigger === 'click') {
-            entry.tweens.push(play(els, preset, duration, delay));
+            entry.tweens.push(Engine.play(els, r.preset, r.duration, r.delay, null, true));
 
         } else if (msg.trigger === 'scroll') {
             const ST = window.ScrollTrigger;
             if (!ST) {
                 fail('scrolltrigger_missing', 'ScrollTrigger is not loaded; playing the animation immediately instead.');
-                entry.tweens.push(play(els, preset, duration, delay));
-            } else {
-                gsap.registerPlugin(ST);
-                els.forEach((el) => {
-                    const tween = play(el, preset, duration, delay, { paused: true });
-                    entry.tweens.push(tween);
-                    entry.triggers.push(ST.create({ trigger: el, start: 'top 85%', once: true, onEnter: () => tween.play() }));
-                });
-                const r = els[0].getBoundingClientRect();
-                if (r.top < 0 || r.bottom > window.innerHeight) {
+            }
+            els.forEach((el) => {
+                const armed = Engine.scroll(el, r, ST, true);
+                entry.tweens.push(armed.tween);
+                if (armed.trigger) {
+                    entry.triggers.push(armed.trigger);
+                }
+            });
+            if (ST) {
+                const rect = els[0].getBoundingClientRect();
+                if (rect.top < 0 || rect.bottom > window.innerHeight) {
                     els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
                 }
             }
 
         } else {
             const handlers = els.map((el) => {
-                let tween = null;
-                let enter;
-                let leave = () => { };
-
-                if (preset.kind === 'entrance') {
-                    enter = () => {
-                        if (!tween || !tween.isActive()) {
-                            tween = runEntrance(el, preset, duration, delay);
-                        }
-                    };
-                } else if (preset.hold) {
-                    tween = gsap.to(el, Object.assign({}, preset.to, { duration, ease: preset.ease || 'power2.out', paused: true }));
-                    enter = () => tween.play();
-                    leave = () => tween.reverse();
-                } else {
-                    enter = () => {
-                        if (!tween || !tween.isActive()) {
-                            tween = runEffect(el, preset, duration, delay);
-                        }
-                    };
-                }
-
-                el.addEventListener('mouseenter', enter);
-                el.addEventListener('mouseleave', leave);
-                entry.listeners.push({ el, type: 'mouseenter', fn: enter }, { el, type: 'mouseleave', fn: leave });
-                entry.tweens.push({ kill: () => tween && tween.kill() });
-
-                return { enter, leave };
+                const hv = Engine.hover(el, r.preset, r.duration, r.delay);
+                el.addEventListener('mouseenter', hv.enter);
+                el.addEventListener('mouseleave', hv.leave);
+                entry.listeners.push({ el, type: 'mouseenter', fn: hv.enter }, { el, type: 'mouseleave', fn: hv.leave });
+                entry.tweens.push({ kill: hv.kill });
+                return hv;
             });
 
-            handlers.forEach((h) => h.enter());
-            entry.calls.push(gsap.delayedCall(delay + duration + 0.5, () => handlers.forEach((h) => h.leave())));
+            handlers.forEach((hv) => hv.enter());
+            entry.calls.push(gsap.delayedCall(r.delay + r.duration + 0.5, () => handlers.forEach((hv) => hv.leave())));
         }
 
         post({ type: 'preview-started', selector: msg.selector, trigger: msg.trigger, matches: els.length });
     }
 
     function announce() {
-        post({ type: 'ready', gsap: !!window.gsap, scrollTrigger: !!window.ScrollTrigger });
+        post({ type: 'ready', gsap: !!(window.gsap && Engine), scrollTrigger: !!window.ScrollTrigger });
     }
 
     function highlight(selector) {
@@ -580,8 +487,7 @@
         }
     }
 
-    // Capture phase on window: runs before the page's own handlers, so links,
-    // forms and site UI scripts never fire while the builder is open.
+
     ['click', 'dblclick', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'submit'].forEach((type) => {
         window.addEventListener(type, type === 'click' ? onClick : block, true);
     });

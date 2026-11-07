@@ -81,12 +81,14 @@ final class KWIPA_Admin {
 			return;
 		}
 
-		KWIPA_Assets::register();
+		KWIPA_Assets::register( true );
+
+		wp_add_inline_script( 'kwipa-engine', 'window.KWIPABuilderMode = true;', 'before' );
 
 		wp_enqueue_script(
 			'kwipa-inspector',
 			KWIPA_URL . 'assets/js/kwip-inspector.js',
-			array( 'kwipa-gsap', 'kwipa-scrolltrigger' ),
+			array( 'kwipa-engine', 'kwipa-gsap', 'kwipa-scrolltrigger' ),
 			KWIPA_VERSION,
 			true
 		);
