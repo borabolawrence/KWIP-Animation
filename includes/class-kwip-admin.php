@@ -108,9 +108,20 @@ final class KWIPA_Admin {
 			'manage_options',
 			self::MENU_SLUG,
 			array( __CLASS__, 'render_page' ),
-			'dashicons-controls-play',
+			self::menu_icon(),
 			58
 		);
+	}
+
+	/**
+	 * A play triangle with a keyframe bar, as a data-URI SVG.
+	 * WordPress repaints SVG menu icons to match the admin color scheme.
+	 *
+	 * @return string
+	 */
+	private static function menu_icon() {
+		$svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path fill="#a7aaad" d="M4 3l10 7-10 7V3z"/><rect fill="#a7aaad" x="15.5" y="3" width="1.8" height="14" rx=".9"/></svg>';
+		return 'data:image/svg+xml;base64,' . base64_encode( $svg );
 	}
 
 	public static function render_page() {

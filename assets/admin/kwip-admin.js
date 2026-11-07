@@ -27,12 +27,12 @@
     const SELECTOR_OK = /^[\p{L}\p{N}_\-#.>+~:()*\\\/ ]+$/u;
 
     const TABS = ['load', 'scroll', 'hover', 'click'].filter((t) => data.triggers.indexOf(t) !== -1);
-    const TAB_LABELS = { load: 'On Load', scroll: 'On Scroll', hover: 'On Hover', click: 'On Click' };
+    const TAB_LABELS = { load: 'On load', scroll: 'On scroll', hover: 'On hover', click: 'On click' };
     const TAB_HINTS = {
-        load: 'Plays when the page finishes loading.',
-        scroll: 'Plays once when the element scrolls into view.',
-        hover: 'Plays when the pointer enters the element.',
-        click: 'Plays when the element is clicked.',
+        load: 'Plays once, as soon as the page has loaded.',
+        scroll: 'Plays once, when the element scrolls into view.',
+        hover: 'Plays when the pointer moves over the element.',
+        click: 'Plays each time the element is clicked.',
     };
     const DEFAULTS = {
         load: { animation: 'fade-up', duration: 1, delay: 0 },
@@ -41,11 +41,42 @@
         click: { animation: 'spin', duration: 0.8, delay: 0 },
     };
 
+    const ANIM_LABELS = {
+        'fade-in': 'Fade in', 'fade-up': 'Fade up', 'fade-down': 'Fade down', 'fade-left': 'Fade left', 'fade-right': 'Fade right',
+        'scale-up': 'Scale up', 'scale-down': 'Scale down', 'pulse': 'Pulse', 'spin': 'Spin',
+        'flip-x': 'Flip X', 'flip-y': 'Flip Y', 'shake': 'Shake',
+    };
+    const ANIM_GROUPS = [
+        { title: 'Entrances', slugs: ['fade-in', 'fade-up', 'fade-down', 'fade-left', 'fade-right'] },
+        { title: 'Effects', slugs: ['scale-up', 'scale-down', 'pulse', 'spin', 'flip-x', 'flip-y', 'shake'] },
+    ];
+
     const frameOrigin = new URL(data.frame.url).origin;
     const originOk = frameOrigin === window.location.origin;
 
     const clamp = (n, min, max) => Math.round(Math.min(Math.max(n, min), max) * 1000) / 1000;
-    const titleCase = (slug) => slug.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const fmt = (n) => (Math.round(n * 100) / 100) + ' s';
+
+    function animLabel(slug) {
+        if (ANIM_LABELS[slug]) {
+            return ANIM_LABELS[slug];
+        }
+        const text = slug.replace(/-/g, ' ');
+        return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    const GROUPS = (function () {
+        const known = {};
+        const groups = ANIM_GROUPS.map((g) => {
+            g.slugs.forEach((s) => { known[s] = true; });
+            return { title: g.title, slugs: g.slugs.filter((s) => data.animations.indexOf(s) !== -1) };
+        });
+        const extra = data.animations.filter((s) => !known[s]);
+        if (extra.length) {
+            groups.push({ title: 'More', slugs: extra });
+        }
+        return groups.filter((g) => g.slugs.length);
+    }());
 
     function normalize(raw) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -86,12 +117,6 @@
         return d;
     }
 
-    /**
-     * Turn what the user typed into a framed-preview URL, or null if it is not a
-     * page on this site. Relative input resolves against the site home URL, so
-     * subdirectory installs work. The origin check is the safety net for
-     * protocol-relative or backslash tricks.
-     */
     function buildFrameUrl(input) {
         const text = (input || '').trim();
         let url;
@@ -126,64 +151,105 @@
         }, [props.value]);
 
         return h('label', { className: 'kwipa-field', htmlFor: props.id },
-            h('span', null, props.label),
-            h('input', {
-                id: props.id,
-                ref: inputRef,
-                type: 'number',
-                inputMode: 'decimal',
-                min: props.min,
-                max: props.max,
-                step: props.step,
-                value: text,
-                onChange: (e) => {
-                    const raw = e.target.value;
-                    setText(raw);
-                    const n = parseFloat(raw);
-                    if (Number.isFinite(n)) {
-                        props.onChange(clamp(n, props.min, props.max));
-                    }
-                },
-                onBlur: () => setText(String(props.value)),
-            })
+            h('span', { className: 'kwipa-field-label' }, props.label),
+            h('span', { className: 'kwipa-input' },
+                h('input', {
+                    id: props.id,
+                    ref: inputRef,
+                    type: 'number',
+                    inputMode: 'decimal',
+                    min: props.min,
+                    max: props.max,
+                    step: props.step,
+                    value: text,
+                    onChange: (e) => {
+                        const raw = e.target.value;
+                        setText(raw);
+                        const n = parseFloat(raw);
+                        if (Number.isFinite(n)) {
+                            props.onChange(clamp(n, props.min, props.max));
+                        }
+                    },
+                    onBlur: () => setText(String(props.value)),
+                }),
+                h('em', { 'aria-hidden': 'true' }, 's')
+            )
+        );
+    }
+
+    function PresetGrid(props) {
+        const inGroups = GROUPS.some((g) => g.slugs.indexOf(props.value) !== -1);
+        const groups = inGroups ? GROUPS : GROUPS.concat([{ title: 'More', slugs: [props.value] }]);
+
+        return h('div', { className: 'kwipa-presets', role: 'radiogroup', 'aria-label': 'Animation' },
+            groups.map((group) => h('div', { key: group.title, className: 'kwipa-preset-group' },
+                h('p', { className: 'kwipa-group-title' }, group.title),
+                h('div', { className: 'kwipa-tiles' },
+                    group.slugs.map((slug) => h('button', {
+                        key: slug,
+                        type: 'button',
+                        role: 'radio',
+                        'aria-checked': props.value === slug,
+                        'data-anim': slug,
+                        className: 'kwipa-tile' + (props.value === slug ? ' is-on' : ''),
+                        onClick: () => props.onChange(slug),
+                    },
+                        h('span', { className: 'kwipa-glyph-box', 'aria-hidden': 'true' }, h('i', { className: 'kwipa-glyph' })),
+                        h('span', { className: 'kwipa-tile-name' }, animLabel(slug))))
+                )
+            ))
+        );
+    }
+
+    function TimingStrip(props) {
+        const total = Math.max(2, props.delay + props.duration);
+        const wait = (props.delay / total) * 100;
+        const run = Math.max(2, (props.duration / total) * 100);
+
+        return h('div', { className: 'kwipa-timing', 'aria-hidden': 'true' },
+            h('div', { className: 'kwipa-track' },
+                h('span', { className: 'kwipa-wait', style: { width: wait + '%' } }),
+                h('span', { className: 'kwipa-run', style: { width: run + '%' } })
+            ),
+            h('div', { className: 'kwipa-scale' }, h('span', null, '0 s'), h('span', null, fmt(total)))
         );
     }
 
     function TriggerPanel(props) {
         const s = props.settings;
-        const options = data.animations.slice();
-        if (s && options.indexOf(s.animation) === -1) {
-            options.push(s.animation);
-        }
 
-        return h('div', { className: 'kwipa-panel', role: 'tabpanel' },
+        return h('div', { className: 'kwipa-panel' + (props.disabled ? ' is-disabled' : ''), role: 'tabpanel' },
             h('p', { className: 'kwipa-hint' }, TAB_HINTS[props.trigger]),
-            h('label', { className: 'kwipa-toggle' },
+            h('label', { className: 'kwipa-switch' },
                 h('input', {
                     type: 'checkbox',
+                    role: 'switch',
                     checked: !!s,
                     disabled: props.disabled,
                     onChange: (e) => (e.target.checked ? props.onEnable() : props.onDisable()),
                 }),
-                h('span', null, 'Enable ' + TAB_LABELS[props.trigger])
+                h('span', { className: 'kwipa-switch-ui', 'aria-hidden': 'true' }),
+                h('span', null, 'Animate ' + TAB_LABELS[props.trigger].toLowerCase())
             ),
             s && h(Fragment, null,
-                h('label', { className: 'kwipa-field', htmlFor: 'kwipa-animation' },
-                    h('span', null, 'Animation'),
-                    h('select', { id: 'kwipa-animation', value: s.animation, onChange: (e) => props.onChange({ animation: e.target.value }) },
-                        options.map((slug) => h('option', { key: slug, value: slug }, titleCase(slug)))
-                    )
+                h('fieldset', { className: 'kwipa-fieldset' },
+                    h('legend', null, 'Animation'),
+                    h(PresetGrid, { value: s.animation, onChange: (slug) => props.onChange({ animation: slug }) })
                 ),
-                h('div', { className: 'kwipa-row' },
-                    h(NumberField, { id: 'kwipa-duration', label: 'Duration (s)', value: s.duration, min: 0, max: data.limits.maxDuration, step: 0.1, onChange: (v) => props.onChange({ duration: v }) }),
-                    h(NumberField, { id: 'kwipa-delay', label: 'Delay (s)', value: s.delay || 0, min: 0, max: data.limits.maxDelay, step: 0.1, onChange: (v) => props.onChange({ delay: v }) })
+                h('fieldset', { className: 'kwipa-fieldset' },
+                    h('legend', null, 'Timing'),
+                    h('div', { className: 'kwipa-row' },
+                        h(NumberField, { id: 'kwipa-duration', label: 'Duration', value: s.duration, min: 0, max: data.limits.maxDuration, step: 0.1, onChange: (v) => props.onChange({ duration: v }) }),
+                        h(NumberField, { id: 'kwipa-delay', label: 'Delay', value: s.delay || 0, min: 0, max: data.limits.maxDelay, step: 0.1, onChange: (v) => props.onChange({ delay: v }) })
+                    ),
+                    h(TimingStrip, { duration: s.duration, delay: s.delay || 0 })
                 ),
                 h('div', { className: 'kwipa-actions' },
-                    h('button', { type: 'button', className: 'button button-secondary', disabled: props.previewDisabled, onClick: props.onPreview }, 'Preview'),
-                    h('button', { type: 'button', className: 'button-link', disabled: props.previewDisabled, onClick: props.onReset }, 'Reset preview'),
+                    h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-dark', disabled: props.previewDisabled, onClick: props.onPreview }, 'Play preview'),
+                    h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-ghost', disabled: props.previewDisabled, onClick: props.onReset }, 'Reset'),
                     h('label', { className: 'kwipa-auto' },
                         h('input', { type: 'checkbox', checked: props.autoPreview, onChange: (e) => props.onAutoPreview(e.target.checked) }),
-                        h('span', null, 'Auto-preview')
+                        h('span', null, 'Preview as I edit')
                     )
                 )
             )
@@ -214,7 +280,6 @@
         selectedRef.current = selected;
 
         const dirty = useMemo(() => JSON.stringify(prepare(config)) !== JSON.stringify(prepare(saved)), [config, saved]);
-
 
         function send(type, extra) {
             const win = iframeRef.current && iframeRef.current.contentWindow;
@@ -344,7 +409,7 @@
         function discard() {
             setConfig(saved);
             send('clear');
-            setNotice({ type: 'info', text: 'Unsaved changes discarded.' });
+            setNotice({ type: 'info', text: 'Changes discarded.' });
         }
 
 
@@ -383,7 +448,7 @@
                 const next = normalize(body && body.config);
                 setConfig(next);
                 setSaved(next);
-                setNotice({ type: 'success', text: 'Saved.' });
+                setNotice({ type: 'success', text: 'Changes saved.' });
             } catch (err) {
                 setNotice({ type: 'error', text: err && err.message ? err.message : 'Save failed.' });
             } finally {
@@ -430,9 +495,9 @@
 
 
         const statusText = {
-            loading: 'Loading preview\u2026',
-            ready: bridge.gsap ? 'Inspector ready' : 'Inspector ready, but GSAP is missing in the preview',
-            silent: 'Inspector not responding. Is the page cached or blocking framing?',
+            loading: 'Loading page\u2026',
+            ready: bridge.gsap ? 'Ready. Click an element to select it.' : 'Ready, but GSAP did not load in the preview.',
+            silent: 'Preview not responding. Check page caching and framing rules.',
         }[bridge.state];
 
         const elementKeys = Object.keys(config);
@@ -440,68 +505,77 @@
         return h('div', { className: 'kwipa-app' },
             h('aside', { className: 'kwipa-sidebar' },
                 h('header', { className: 'kwipa-head' },
-                    h('h1', null, 'KWIP Animation'),
-                    h('span', { className: 'kwipa-chip' + (dirty ? ' is-dirty' : '') }, dirty ? 'Unsaved changes' : 'All changes saved'),
+                    h('div', { className: 'kwipa-brand' },
+                        h('h1', null, 'KWIP Animation'),
+                        h('span', { className: 'kwipa-state' + (dirty ? ' is-dirty' : '') }, h('i', { 'aria-hidden': 'true' }), dirty ? 'Unsaved changes' : 'Saved')
+                    ),
                     h('div', { className: 'kwipa-head-actions' },
-                        h('button', { type: 'button', className: 'button', disabled: !dirty || saving, onClick: discard }, 'Discard'),
-                        h('button', { type: 'button', className: 'button button-primary', disabled: !dirty || saving, onClick: save }, saving ? 'Saving\u2026' : 'Save')
+                        h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-ghost', disabled: !dirty || saving, onClick: discard }, 'Discard'),
+                        h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-primary', disabled: !dirty || saving, onClick: save }, saving ? 'Saving\u2026' : 'Save changes')
                     )
                 ),
 
-                notice && h(Notice, { type: notice.type, text: notice.text, onDismiss: () => setNotice(null) }),
+                h('div', { className: 'kwipa-scroll' },
+                    notice && h(Notice, { type: notice.type, text: notice.text, onDismiss: () => setNotice(null) }),
 
-                h('section', { className: 'kwipa-section' },
-                    h('h2', null, 'Selected element'),
-                    selected
-                        ? h(Fragment, null, h('code', { className: 'kwipa-selector' }, selected), selectedLabel && h('span', { className: 'kwipa-label' }, selectedLabel))
-                        : h('p', { className: 'kwipa-hint' }, 'Click any element in the preview to select it.')
-                ),
+                    h('section', { className: 'kwipa-section' },
+                        h('h2', null, 'Selected element'),
+                        selected
+                            ? h(Fragment, null,
+                                h('code', { className: 'kwipa-selector' }, selected),
+                                selectedLabel && h('p', { className: 'kwipa-label' }, selectedLabel))
+                            : h(Fragment, null,
+                                h('p', { className: 'kwipa-empty' }, 'Click anything on the page to animate it.'),
+                                h('p', { className: 'kwipa-hint' }, 'Links and buttons are paused while you build.'))
+                    ),
 
-                h('div', { className: 'kwipa-tabs', role: 'tablist' },
-                    TABS.map((t) => h('button', {
-                        key: t,
-                        type: 'button',
-                        role: 'tab',
-                        'aria-selected': tab === t,
-                        className: 'kwipa-tab' + (tab === t ? ' is-active' : ''),
-                        onClick: () => setTab(t),
-                    }, TAB_LABELS[t], selected && config[selected] && config[selected][t] ? h('i', { className: 'kwipa-dot', 'aria-label': 'enabled' }) : null))
-                ),
+                    h('section', { className: 'kwipa-section' },
+                        h('div', { className: 'kwipa-tabs', role: 'tablist' },
+                            TABS.map((t) => h('button', {
+                                key: t,
+                                type: 'button',
+                                role: 'tab',
+                                'aria-selected': tab === t,
+                                className: 'kwipa-tab' + (tab === t ? ' is-active' : ''),
+                                onClick: () => setTab(t),
+                            }, TAB_LABELS[t], selected && config[selected] && config[selected][t] ? h('i', { className: 'kwipa-dot', 'aria-label': 'enabled' }) : null))
+                        ),
+                        h(TriggerPanel, {
+                            trigger: tab,
+                            settings: current,
+                            disabled: !selected,
+                            previewDisabled: bridge.state !== 'ready',
+                            autoPreview,
+                            onAutoPreview: setAutoPreview,
+                            onEnable: enableTrigger,
+                            onDisable: disableTrigger,
+                            onChange: changeTrigger,
+                            onPreview: () => current && previewNow(selected, tab, current),
+                            onReset: () => send('clear', { selector: selected }),
+                        })
+                    ),
 
-                h(TriggerPanel, {
-                    trigger: tab,
-                    settings: current,
-                    disabled: !selected,
-                    previewDisabled: bridge.state !== 'ready',
-                    autoPreview,
-                    onAutoPreview: setAutoPreview,
-                    onEnable: enableTrigger,
-                    onDisable: disableTrigger,
-                    onChange: changeTrigger,
-                    onPreview: () => current && previewNow(selected, tab, current),
-                    onReset: () => send('clear', { selector: selected }),
-                }),
-
-                h('section', { className: 'kwipa-section' },
-                    h('h2', null, 'Animated elements (' + elementKeys.length + ')'),
-                    elementKeys.length
-                        ? h('ul', { className: 'kwipa-list' }, elementKeys.map((selector) => h('li', { key: selector, className: 'kwipa-item' + (selector === selected ? ' is-active' : '') },
-                            h('button', { type: 'button', className: 'kwipa-item-main', onClick: () => pick(selector) },
-                                h('code', null, selector),
-                                h('span', { className: 'kwipa-badges' }, TABS.filter((t) => config[selector][t]).map((t) => h('span', { key: t, className: 'kwipa-badge' }, t)))
-                            ),
-                            h('button', { type: 'button', className: 'kwipa-item-del', 'aria-label': 'Remove all animations from ' + selector, onClick: () => removeElement(selector) }, '\u00d7')
-                        )))
-                        : h('p', { className: 'kwipa-hint' }, 'Nothing yet. Select an element and enable a trigger.')
+                    h('section', { className: 'kwipa-section' },
+                        h('h2', null, 'Animated elements', h('span', { className: 'kwipa-count' }, elementKeys.length)),
+                        elementKeys.length
+                            ? h('ul', { className: 'kwipa-list' }, elementKeys.map((selector) => h('li', { key: selector, className: 'kwipa-item' + (selector === selected ? ' is-active' : '') },
+                                h('button', { type: 'button', className: 'kwipa-item-main', onClick: () => pick(selector) },
+                                    h('code', { title: selector }, selector),
+                                    h('span', { className: 'kwipa-badges' }, TABS.filter((t) => config[selector][t]).map((t) => h('span', { key: t, className: 'kwipa-badge' }, t)))
+                                ),
+                                h('button', { type: 'button', className: 'kwipa-item-del', 'aria-label': 'Remove all animations from ' + selector, onClick: () => removeElement(selector) }, '\u00d7')
+                            )))
+                            : h('p', { className: 'kwipa-hint' }, 'Nothing yet. Select an element, pick a trigger, then choose an animation.')
+                    )
                 )
             ),
 
             h('main', { className: 'kwipa-stage' },
                 h('form', { className: 'kwipa-bar', onSubmit: navigate },
-                    h('label', { className: 'screen-reader-text', htmlFor: 'kwipa-page' }, 'Page to preview'),
+                    h('label', { className: 'kwipa-bar-label', htmlFor: 'kwipa-page' }, 'Preview page'),
                     h('input', { id: 'kwipa-page', type: 'text', value: pageInput, placeholder: '/ or /about/', disabled: !originOk, onChange: (e) => setPageInput(e.target.value) }),
-                    h('button', { type: 'submit', className: 'button', disabled: !originOk }, 'Go'),
-                    h('span', { className: 'kwipa-status is-' + bridge.state }, statusText)
+                    h('button', { type: 'submit', className: 'kwipa-btn kwipa-btn-dark', disabled: !originOk }, 'Go'),
+                    h('span', { className: 'kwipa-status is-' + bridge.state }, h('i', { 'aria-hidden': 'true' }), statusText)
                 ),
                 !originOk
                     ? h('div', { className: 'kwipa-blocked' },
