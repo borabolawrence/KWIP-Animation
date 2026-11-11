@@ -20,6 +20,7 @@ define( 'KWIPA_PATH', plugin_dir_path( __FILE__ ) );
 define( 'KWIPA_URL', plugin_dir_url( __FILE__ ) );
 
 require_once KWIPA_PATH . 'includes/class-kwip-config.php';
+require_once KWIPA_PATH . 'includes/class-kwip-motions.php';
 require_once KWIPA_PATH . 'includes/class-kwip-rest.php';
 require_once KWIPA_PATH . 'includes/class-kwip-assets.php';
 require_once KWIPA_PATH . 'includes/class-kwip-admin.php';

@@ -76,16 +76,30 @@ final class KWIPA_Frontend {
 		}
 
 		$has_scroll = false;
+		$slugs      = array();
 		foreach ( self::config() as $triggers ) {
-			if ( is_array( $triggers ) && isset( $triggers['scroll'] ) ) {
-				$has_scroll = true;
-				break;
+			if ( ! is_array( $triggers ) ) {
+				continue;
+			}
+			foreach ( $triggers as $trigger => $settings ) {
+				if ( 'scroll' === $trigger ) {
+					$has_scroll = true;
+				}
+				if ( is_array( $settings ) && isset( $settings['animation'] ) ) {
+					$slugs[] = $settings['animation'];
+				}
 			}
 		}
 
 		KWIPA_Assets::register( $has_scroll );
 
-		wp_add_inline_script( 'kwipa-engine', 'window.KWIPAnimationConfig = ' . KWIPA_Config::get_config_json() . ';', 'before' );
+		$motions = KWIPA_Motions::client_payload( array_values( array_unique( $slugs ) ) );
+
+		wp_add_inline_script(
+			'kwipa-engine',
+			'window.KWIPAMotions = ' . KWIPA_Config::encode( $motions ) . ';window.KWIPAnimationConfig = ' . KWIPA_Config::get_config_json() . ';',
+			'before'
+		);
 		wp_enqueue_script( 'kwipa-engine' );
 	}
 }

@@ -18,9 +18,10 @@ final class KWIPA_Admin {
 	const FRAME_NONCE_PARAM  = 'kwipa_nonce';
 	const FRAME_NONCE_ACTION = 'kwipa_frame';
 	const JSON_FLAGS         = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+	const LIBRARY_SLUG = 'kwip-animation-library';
 
-	/** @var string|false Hook suffix returned by add_menu_page(). */
-	private static $page_hook = false;
+	/** @var array Hook suffix => screen ("builder" or "library"), filled by register_menu(). */
+	private static $page_hooks = array();
 
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'register_menu' ) );
@@ -83,7 +84,7 @@ final class KWIPA_Admin {
 
 		KWIPA_Assets::register( true );
 
-		wp_add_inline_script( 'kwipa-engine', 'window.KWIPABuilderMode = true;', 'before' );
+		wp_add_inline_script( 'kwipa-engine', 'window.KWIPABuilderMode = true;window.KWIPAMotions = ' . KWIPA_Config::encode( KWIPA_Motions::client_payload() ) . ';', 'before' );
 
 		wp_enqueue_script(
 			'kwipa-inspector',
@@ -102,7 +103,7 @@ final class KWIPA_Admin {
 
 
 	public static function register_menu() {
-		self::$page_hook = add_menu_page(
+		$builder = add_menu_page(
 			__( 'KWIP Animation', 'kwip-animation' ),
 			__( 'KWIP Animation', 'kwip-animation' ),
 			'manage_options',
@@ -111,6 +112,17 @@ final class KWIPA_Admin {
 			self::menu_icon(),
 			58
 		);
+
+		add_submenu_page( self::MENU_SLUG, __( 'Builder', 'kwip-animation' ), __( 'Builder', 'kwip-animation' ), 'manage_options', self::MENU_SLUG, array( __CLASS__, 'render_page' ) );
+		$library = add_submenu_page( self::MENU_SLUG, __( 'Motion library', 'kwip-animation' ), __( 'Motion library', 'kwip-animation' ), 'manage_options', self::LIBRARY_SLUG, array( __CLASS__, 'render_page' ) );
+
+		self::$page_hooks = array();
+		if ( $builder ) {
+			self::$page_hooks[ $builder ] = 'builder';
+		}
+		if ( $library ) {
+			self::$page_hooks[ $library ] = 'library';
+		}
 	}
 
 	/**
@@ -135,31 +147,47 @@ final class KWIPA_Admin {
 	}
 
 	public static function enqueue_admin_assets( $hook_suffix ) {
-		if ( ! self::$page_hook || $hook_suffix !== self::$page_hook ) {
+		if ( ! isset( self::$page_hooks[ $hook_suffix ] ) ) {
 			return;
 		}
 
-		wp_enqueue_style( 'kwipa-admin', KWIPA_URL . 'assets/admin/kwip-admin.css', array(), KWIPA_VERSION );
-		wp_enqueue_script( 'kwipa-admin', KWIPA_URL . 'assets/admin/kwip-admin.js', array( 'wp-element' ), KWIPA_VERSION, true );
+		$view   = self::$page_hooks[ $hook_suffix ];
+		$handle = 'builder' === $view ? 'kwipa-admin' : 'kwipa-library';
+		$file   = 'builder' === $view ? 'assets/admin/kwip-admin.js' : 'assets/admin/kwip-library.js';
+
+		wp_enqueue_style( 'kwipa-admin', KWIPA_URL . 'assets/admin/kwip-admin.css', array(), KWIPA_Assets::version( 'assets/admin/kwip-admin.css' ) );
+		wp_enqueue_script( $handle, KWIPA_URL . $file, array( 'wp-element' ), KWIPA_Assets::version( $file ), true );
 
 		wp_add_inline_script(
-			'kwipa-admin',
-			'window.KWIPAAdminData = ' . wp_json_encode( self::admin_data(), self::JSON_FLAGS ) . ';',
+			$handle,
+			'window.KWIPAAdminData = ' . wp_json_encode( self::admin_data( $view ), self::JSON_FLAGS ) . ';',
 			'before'
 		);
 	}
 
 	/**
-	 * Everything the React app needs at boot, so it makes no initial request.
 	 *
+	 * @param string $view "builder" or "library".
 	 * @return array
 	 */
-	private static function admin_data() {
+	private static function admin_data( $view ) {
+		$base = array(
+			'view' => $view,
+			'rest' => KWIPA_REST::client_settings(),
+		);
+
+		if ( 'library' === $view ) {
+			return $base + array(
+				'library'    => KWIPA_Motions::library( KWIPA_Config::get_config() ),
+				'limits'     => array( 'maxPackBytes' => KWIPA_REST::MAX_PACK_BYTES ),
+				'builderUrl' => admin_url( 'admin.php?page=' . self::MENU_SLUG ),
+			);
+		}
+
 		$home_origin  = self::origin_of( home_url() );
 		$admin_origin = self::origin_of( admin_url() );
 
-		return array(
-			'rest'       => KWIPA_REST::client_settings(),
+		return $base + array(
 			'frame'      => array(
 				'url'        => home_url( '/' ),
 				'param'      => self::FRAME_PARAM,
@@ -169,11 +197,13 @@ final class KWIPA_Admin {
 			),
 			'config'     => KWIPA_Config::as_object( KWIPA_Config::get_config() ),
 			'animations' => KWIPA_Config::allowed_animations(),
+			'motions'    => KWIPA_Motions::admin_meta(),
 			'triggers'   => KWIPA_Config::TRIGGERS,
 			'limits'     => array(
 				'maxDuration' => KWIPA_Config::MAX_DURATION,
 				'maxDelay'    => KWIPA_Config::MAX_DELAY,
 			),
+			'libraryUrl' => admin_url( 'admin.php?page=' . self::LIBRARY_SLUG ),
 		);
 	}
 

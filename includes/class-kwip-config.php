@@ -32,21 +32,18 @@ final class KWIPA_Config {
 	}
 
 	/**
-	 * Animation presets the builder may save. This list is the contract with the
-	 * frontend engine (Step 4), which must implement every slug here.
+	 * Slugs the save endpoint accepts: every registered motion, narrowed or
+	 * extended by the filter.
 	 *
 	 * @return string[]
 	 */
 	public static function allowed_animations() {
-		$animations = array(
-			'fade-in', 'fade-up', 'fade-down', 'fade-left', 'fade-right',
-			'scale-up', 'scale-down', 'spin', 'pulse', 'shake', 'flip-x', 'flip-y',
-		);
+		$animations = array_map( 'strval', array_keys( KWIPA_Motions::all() ) );
 
 		/**
-		 * Filter the animation presets accepted by the save endpoint.
+		 * Filter the animation slugs accepted by the save endpoint.
 		 *
-		 * @param string[] $animations Preset slugs.
+		 * @param string[] $animations Motion slugs.
 		 */
 		$filtered = apply_filters( 'kwipa_allowed_animations', $animations );
 
@@ -87,19 +84,30 @@ final class KWIPA_Config {
 	}
 
 	/**
-	 * JSON for the inline <script> global (used by the frontend in Step 4).
-	 * The HEX flags escape <, >, &, ' and " inside strings, so a stored value can
-	 * never close the <script> tag or break out of the JS context.
+	 * Shared JSON encoder for everything printed inside a <script>. The HEX flags
+	 * escape <, >, &, ' and " so a stored value can never close the tag or break
+	 * out of the JS context. Empty data becomes {} (not []).
 	 *
+	 * @param mixed $data Array or object.
 	 * @return string
 	 */
-	public static function get_config_json() {
+	public static function encode( $data ) {
 		$json = wp_json_encode(
-			self::as_object( self::get_config() ),
+			empty( $data ) ? new stdClass() : $data,
 			JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
 		);
 		return false === $json ? '{}' : $json;
 	}
+
+	/**
+	 * JSON for the inline window.KWIPAnimationConfig global.
+	 *
+	 * @return string
+	 */
+	public static function get_config_json() {
+		return self::encode( self::get_config() );
+	}
+
 
 	/**
 	 * Validate and sanitize a raw config from the request body.
@@ -145,7 +153,8 @@ final class KWIPA_Config {
 				}
 
 				$animation = ( isset( $settings['animation'] ) && is_string( $settings['animation'] ) ) ? $settings['animation'] : '';
-				if ( ! in_array( $animation, $allowed_animations, true ) ) {
+				$motion    = in_array( $animation, $allowed_animations, true ) ? KWIPA_Motions::get( $animation ) : null;
+				if ( null === $motion ) {
 					return self::error( 'kwipa_invalid_animation', __( 'Unknown animation preset.', 'kwip-animation' ) );
 				}
 
@@ -156,6 +165,18 @@ final class KWIPA_Config {
 
 				if ( isset( $settings['delay'] ) ) {
 					$entry['delay'] = self::sanitize_number( $settings['delay'], 0.0, self::MAX_DELAY );
+				}
+
+				if ( ! empty( $motion['params'] ) && isset( $settings['params'] ) && is_array( $settings['params'] ) ) {
+					$params = array();
+					foreach ( $motion['params'] as $param => $spec ) {
+						if ( isset( $settings['params'][ $param ] ) && is_numeric( $settings['params'][ $param ] ) ) {
+							$params[ $param ] = round( min( max( (float) $settings['params'][ $param ], $spec['min'] ), $spec['max'] ), 3 );
+						}
+					}
+					if ( $params ) {
+						$entry['params'] = $params;
+					}
 				}
 
 				$clean_triggers[ $trigger ] = $entry;

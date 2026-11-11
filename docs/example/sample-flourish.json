@@ -1,0 +1,62 @@
+{
+    "schema": 1,
+    "id": "sample-flourish",
+    "name": "Sample flourish pack",
+    "version": "1.0.0",
+    "author": "Lawrence",
+    "description": "Three example motions: a springy pop, a clip-path curtain reveal, and a wobble.",
+    "motions": {
+        "pop": {
+            "label": "Pop",
+            "group": "Entrances",
+            "kind": "entrance",
+            "glyph": "scale-up",
+            "from": {
+                "opacity": 0,
+                "scale": "$start"
+            },
+            "ease": "back.out(1.7)",
+            "params": {
+                "start": {
+                    "type": "number",
+                    "label": "Start scale",
+                    "default": 0.6,
+                    "min": 0,
+                    "max": 1,
+                    "step": 0.05
+                }
+            }
+        },
+        "curtain": {
+            "label": "Curtain reveal",
+            "group": "Entrances",
+            "kind": "entrance",
+            "glyph": "fade-down",
+            "from": {
+                "clipPath": "inset(0 0 100% 0)"
+            },
+            "to": {
+                "clipPath": "inset(0 0 0% 0)"
+            },
+            "ease": "expo.out"
+        },
+        "wobble": {
+            "label": "Wobble",
+            "group": "Effects",
+            "kind": "effect",
+            "glyph": "shake",
+            "keyframes": {
+                "rotation": [
+                    -6,
+                    6,
+                    -4,
+                    4,
+                    -2,
+                    2,
+                    0
+                ],
+                "easeEach": "sine.inOut"
+            }
+        }
+    }
+}

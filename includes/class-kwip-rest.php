@@ -17,6 +17,7 @@ final class KWIPA_REST {
 	const NONCE_ACTION      = 'kwipa_builder';
 	const NONCE_HEADER      = 'X-KWIPA-Nonce';
 	const MAX_PAYLOAD_BYTES = 524288;
+	const MAX_PACK_BYTES = 262144;
 
 	/**
 	 * Hook registration only.
@@ -45,6 +46,127 @@ final class KWIPA_REST {
 				'permission_callback' => array( __CLASS__, 'check_permissions' ),
 			)
 		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/motions',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'handle_library' ),
+				'permission_callback' => array( __CLASS__, 'check_permissions' ),
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/motions/install',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'handle_install' ),
+				'permission_callback' => array( __CLASS__, 'check_permissions' ),
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/motions/(?P<id>[a-z0-9]+(?:-[a-z0-9]+)*)',
+			array(
+				'methods'             => WP_REST_Server::DELETABLE,
+				'callback'            => array( __CLASS__, 'handle_remove' ),
+				'permission_callback' => array( __CLASS__, 'check_permissions' ),
+			)
+		);
+	}
+
+
+	public static function handle_library() {
+		return rest_ensure_response( array( 'library' => KWIPA_Motions::library( KWIPA_Config::get_config() ) ) );
+	}
+
+	/**
+	 *
+	 * @param WP_REST_Request $request Incoming request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public static function handle_install( WP_REST_Request $request ) {
+		if ( strlen( (string) $request->get_body() ) > self::MAX_PACK_BYTES ) {
+			return new WP_Error(
+				'kwipa_payload_too_large',
+				__( 'That motion pack is too large to install.', 'kwip-animation' ),
+				array( 'status' => 413 )
+			);
+		}
+
+		$body = $request->get_json_params();
+		$raw  = ( is_array( $body ) && isset( $body['pack'] ) ) ? $body['pack'] : null;
+
+		$before = KWIPA_Motions::installed();
+		$pack   = KWIPA_Motions::install( $raw );
+		if ( is_wp_error( $pack ) ) {
+			return $pack;
+		}
+
+		$config = KWIPA_Config::get_config();
+
+		return rest_ensure_response(
+			array(
+				'success'  => true,
+				'name'     => $pack['name'],
+				'replaced' => isset( $before[ $pack['id'] ] ),
+				'orphans'  => KWIPA_Motions::orphans( $config ),
+				'library'  => KWIPA_Motions::library( $config ),
+			)
+		);
+	}
+
+	/**
+	 *
+	 * @param WP_REST_Request $request Incoming request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public static function handle_remove( WP_REST_Request $request ) {
+		$id = (string) $request['id'];
+		if ( ! isset( KWIPA_Motions::installed()[ $id ] ) ) {
+			return new WP_Error( 'kwipa_pack_missing', __( 'That motion pack is not installed.', 'kwip-animation' ), array( 'status' => 404 ) );
+		}
+
+		$config = KWIPA_Config::get_config();
+		$usages = KWIPA_Motions::usages( $id, $config );
+		$body   = $request->get_json_params();
+		$force  = is_array( $body ) && isset( $body['force'] ) && true === $body['force'];
+
+		if ( $usages && ! $force ) {
+			return new WP_Error(
+				'kwipa_pack_in_use',
+				__( 'Animations on this site still use this pack.', 'kwip-animation' ),
+				array(
+					'status' => 409,
+					'count'  => count( $usages ),
+					'usages' => array_slice( $usages, 0, 20 ),
+				)
+			);
+		}
+
+		if ( $usages ) {
+			$cleaned = KWIPA_Motions::strip_usages( $id, $config );
+			if ( ! KWIPA_Config::save( $cleaned ) ) {
+				return new WP_Error( 'kwipa_save_failed', __( 'The configuration could not be saved.', 'kwip-animation' ), array( 'status' => 500 ) );
+			}
+			do_action( 'kwipa_config_saved', $cleaned );
+		}
+
+		$removed = KWIPA_Motions::remove( $id );
+		if ( is_wp_error( $removed ) ) {
+			return $removed;
+		}
+
+		return rest_ensure_response(
+			array(
+				'success'           => true,
+				'removedAnimations' => count( $usages ),
+				'library'           => KWIPA_Motions::library( KWIPA_Config::get_config() ),
+			)
+		);
 	}
 
 	/**
@@ -63,7 +185,6 @@ final class KWIPA_REST {
 	}
 
 	/**
-	 * Gate for every endpoint: capability, then plugin-specific nonce.
 	 *
 	 * @param WP_REST_Request $request Incoming request.
 	 * @return true|WP_Error
@@ -96,7 +217,6 @@ final class KWIPA_REST {
 	}
 
 	/**
-	 * POST /save
 	 *
 	 * @param WP_REST_Request $request Incoming request.
 	 * @return WP_REST_Response|WP_Error

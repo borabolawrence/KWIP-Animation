@@ -41,41 +41,30 @@
         click: { animation: 'spin', duration: 0.8, delay: 0 },
     };
 
-    const ANIM_LABELS = {
-        'fade-in': 'Fade in', 'fade-up': 'Fade up', 'fade-down': 'Fade down', 'fade-left': 'Fade left', 'fade-right': 'Fade right',
-        'scale-up': 'Scale up', 'scale-down': 'Scale down', 'pulse': 'Pulse', 'spin': 'Spin',
-        'flip-x': 'Flip X', 'flip-y': 'Flip Y', 'shake': 'Shake',
-    };
-    const ANIM_GROUPS = [
-        { title: 'Entrances', slugs: ['fade-in', 'fade-up', 'fade-down', 'fade-left', 'fade-right'] },
-        { title: 'Effects', slugs: ['scale-up', 'scale-down', 'pulse', 'spin', 'flip-x', 'flip-y', 'shake'] },
-    ];
-
     const frameOrigin = new URL(data.frame.url).origin;
     const originOk = frameOrigin === window.location.origin;
 
     const clamp = (n, min, max) => Math.round(Math.min(Math.max(n, min), max) * 1000) / 1000;
     const fmt = (n) => (Math.round(n * 100) / 100) + ' s';
 
+    const MOTIONS = data.motions || {};
+
     function animLabel(slug) {
-        if (ANIM_LABELS[slug]) {
-            return ANIM_LABELS[slug];
-        }
-        const text = slug.replace(/-/g, ' ');
-        return text.charAt(0).toUpperCase() + text.slice(1);
+        return MOTIONS[slug] && MOTIONS[slug].label ? MOTIONS[slug].label : slug;
     }
 
     const GROUPS = (function () {
-        const known = {};
-        const groups = ANIM_GROUPS.map((g) => {
-            g.slugs.forEach((s) => { known[s] = true; });
-            return { title: g.title, slugs: g.slugs.filter((s) => data.animations.indexOf(s) !== -1) };
+        const order = [];
+        const byTitle = {};
+        data.animations.forEach((slug) => {
+            const title = (MOTIONS[slug] && MOTIONS[slug].group) || 'More';
+            if (!byTitle[title]) {
+                byTitle[title] = { title, slugs: [] };
+                order.push(title);
+            }
+            byTitle[title].slugs.push(slug);
         });
-        const extra = data.animations.filter((s) => !known[s]);
-        if (extra.length) {
-            groups.push({ title: 'More', slugs: extra });
-        }
-        return groups.filter((g) => g.slugs.length);
+        return order.map((title) => byTitle[title]);
     }());
 
     function normalize(raw) {
@@ -190,7 +179,7 @@
                         type: 'button',
                         role: 'radio',
                         'aria-checked': props.value === slug,
-                        'data-anim': slug,
+                        'data-anim': (MOTIONS[slug] && MOTIONS[slug].glyph) || slug,
                         className: 'kwipa-tile' + (props.value === slug ? ' is-on' : ''),
                         onClick: () => props.onChange(slug),
                     },
@@ -234,7 +223,8 @@
             s && h(Fragment, null,
                 h('fieldset', { className: 'kwipa-fieldset' },
                     h('legend', null, 'Animation'),
-                    h(PresetGrid, { value: s.animation, onChange: (slug) => props.onChange({ animation: slug }) })
+                    h(PresetGrid, { value: s.animation, onChange: (slug) => props.onChange({ animation: slug }) }),
+                    data.libraryUrl && h('a', { className: 'kwipa-more', href: data.libraryUrl }, 'Get more motions')
                 ),
                 h('fieldset', { className: 'kwipa-fieldset' },
                     h('legend', null, 'Timing'),

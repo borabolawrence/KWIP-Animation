@@ -49,20 +49,59 @@
         gsap.registerPlugin(window.ScrollTrigger);
     }
 
-    var PRESETS = {
-        'fade-in': { kind: 'entrance', from: { opacity: 0 } },
-        'fade-up': { kind: 'entrance', from: { opacity: 0, y: 40 } },
-        'fade-down': { kind: 'entrance', from: { opacity: 0, y: -40 } },
-        'fade-left': { kind: 'entrance', from: { opacity: 0, x: 40 } },
-        'fade-right': { kind: 'entrance', from: { opacity: 0, x: -40 } },
-        'scale-up': { kind: 'effect', to: { scale: 1.1 }, legs: 2, hold: true },
-        'scale-down': { kind: 'effect', to: { scale: 0.9 }, legs: 2, hold: true },
-        'pulse': { kind: 'effect', to: { scale: 1.12 }, legs: 4 },
-        'spin': { kind: 'effect', to: { rotation: '+=360' }, ease: 'power2.inOut' },
-        'flip-x': { kind: 'effect', to: { rotationX: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
-        'flip-y': { kind: 'effect', to: { rotationY: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
-        'shake': { kind: 'effect', keyframes: { x: [-10, 10, -8, 8, -4, 4, 0], easeEach: 'sine.inOut' } }
-    };
+    // var PRESETS = {
+    //     'fade-in': { kind: 'entrance', from: { opacity: 0 } },
+    //     'fade-up': { kind: 'entrance', from: { opacity: 0, y: 40 } },
+    //     'fade-down': { kind: 'entrance', from: { opacity: 0, y: -40 } },
+    //     'fade-left': { kind: 'entrance', from: { opacity: 0, x: 40 } },
+    //     'fade-right': { kind: 'entrance', from: { opacity: 0, x: -40 } },
+    //     'scale-up': { kind: 'effect', to: { scale: 1.1 }, legs: 2, hold: true },
+    //     'scale-down': { kind: 'effect', to: { scale: 0.9 }, legs: 2, hold: true },
+    //     'pulse': { kind: 'effect', to: { scale: 1.12 }, legs: 4 },
+    //     'spin': { kind: 'effect', to: { rotation: '+=360' }, ease: 'power2.inOut' },
+    //     'flip-x': { kind: 'effect', to: { rotationX: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
+    //     'flip-y': { kind: 'effect', to: { rotationY: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
+    //     'shake': { kind: 'effect', keyframes: { x: [-10, 10, -8, 8, -4, 4, 0], easeEach: 'sine.inOut' } }
+    // };
+
+    // Motion definitions printed by PHP (only the ones this page uses; the full
+    // library in the builder). See motions/core.json for the format.
+    var MOTIONS = window.KWIPAMotions && typeof window.KWIPAMotions === 'object' ? window.KWIPAMotions : {};
+    var TOKEN = /^(-?)\$([a-z][a-z0-9_]*)$/;
+
+    function bind(value, def, overrides) {
+        var m = typeof value === 'string' ? TOKEN.exec(value) : null;
+        if (!m) {
+            return value;
+        }
+        var spec = def.params && has(def.params, m[2]) ? def.params[m[2]] : null;
+        if (!spec) {
+            return 0;
+        }
+        var raw = overrides && typeof overrides === 'object' && has(overrides, m[2]) ? overrides[m[2]] : spec.default;
+        var n = num(raw, spec.default, spec.min, spec.max);
+        return m[1] ? -n : n;
+    }
+
+    function bindProps(props, def, overrides) {
+        var out = {};
+        for (var key in props) {
+            if (has(props, key)) {
+                out[key] = Array.isArray(props[key])
+                    ? props[key].map(function (v) { return bind(v, def, overrides); })
+                    : bind(props[key], def, overrides);
+            }
+        }
+        return out;
+    }
+
+    function compile(def, overrides) {
+        var preset = { kind: def.kind, ease: def.ease, legs: def.legs, hold: def.hold };
+        if (def.from) { preset.from = bindProps(def.from, def, overrides); }
+        if (def.to) { preset.to = bindProps(def.to, def, overrides); }
+        if (def.keyframes) { preset.keyframes = bindProps(def.keyframes, def, overrides); }
+        return preset;
+    }
 
     function extend(target) {
         for (var i = 1; i < arguments.length; i++) {
@@ -90,17 +129,17 @@
     }
 
     /**
-     * Validate one trigger's settings (never trust the config blindly, even
-     * though PHP sanitized it).
+     * Validate one trigger's settings against the loaded motions (never trust
+     * the config blindly, even though PHP sanitized it).
      *
      * @return {{preset:Object,duration:number,delay:number}|null}
      */
     function resolve(settings) {
-        if (!settings || typeof settings !== 'object' || typeof settings.animation !== 'string' || !has(PRESETS, settings.animation)) {
+        if (!settings || typeof settings !== 'object' || typeof settings.animation !== 'string' || !has(MOTIONS, settings.animation)) {
             return null;
         }
         return {
-            preset: PRESETS[settings.animation],
+            preset: compile(MOTIONS[settings.animation], settings.params),
             duration: num(settings.duration, 1, 0, 30),
             delay: num(settings.delay, 0, 0, 30)
         };
@@ -112,7 +151,12 @@
             gsap.killTweensOf(els, props);
             gsap.set(els, { clearProps: props });
         }
-        return gsap.from(els, extend({}, preset.from, { duration: duration, delay: delay, ease: preset.ease || 'power2.out' }, extra));
+        var timing = extend({ duration: duration, delay: delay, ease: preset.ease || 'power2.out' }, extra);
+
+        if (preset.to) {
+            return gsap.fromTo(els, extend({}, preset.from), extend({}, preset.to, timing));
+        }
+        return gsap.from(els, extend({}, preset.from, timing));
     }
 
     function effect(els, preset, duration, delay, extra) {
@@ -197,7 +241,7 @@
         return { tween: tween, trigger: trigger };
     }
 
-    window.KWIPAEngine = { presets: PRESETS, resolve: resolve, play: play, hover: hover, scroll: scroll };
+    window.KWIPAEngine = { motions: MOTIONS, resolve: resolve, play: play, hover: hover, scroll: scroll };
 
     if (window.KWIPABuilderMode) {
         return;
