@@ -49,6 +49,16 @@ final class KWIPA_REST {
 
 		register_rest_route(
 			self::REST_NAMESPACE,
+			'/frame-nonce',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'handle_frame_nonce' ),
+				'permission_callback' => array( __CLASS__, 'check_permissions' ),
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
 			'/motions',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -78,16 +88,16 @@ final class KWIPA_REST {
 		);
 	}
 
-
 	public static function handle_library() {
 		return rest_ensure_response( array( 'library' => KWIPA_Motions::library( KWIPA_Config::get_config() ) ) );
 	}
 
-	/**
-	 *
-	 * @param WP_REST_Request $request Incoming request.
-	 * @return WP_REST_Response|WP_Error
-	 */
+	public static function handle_frame_nonce() {
+		return rest_ensure_response(
+			array( 'nonce' => wp_create_nonce( KWIPA_Admin::FRAME_NONCE_ACTION ) )
+		);
+	}
+
 	public static function handle_install( WP_REST_Request $request ) {
 		if ( strlen( (string) $request->get_body() ) > self::MAX_PACK_BYTES ) {
 			return new WP_Error(
@@ -106,7 +116,7 @@ final class KWIPA_REST {
 			return $pack;
 		}
 
-		$config = KWIPA_Config::get_config();
+		$config = KWIPA_Config::get_scoped_config();
 
 		return rest_ensure_response(
 			array(
@@ -119,18 +129,13 @@ final class KWIPA_REST {
 		);
 	}
 
-	/**
-	 *
-	 * @param WP_REST_Request $request Incoming request.
-	 * @return WP_REST_Response|WP_Error
-	 */
 	public static function handle_remove( WP_REST_Request $request ) {
 		$id = (string) $request['id'];
 		if ( ! isset( KWIPA_Motions::installed()[ $id ] ) ) {
 			return new WP_Error( 'kwipa_pack_missing', __( 'That motion pack is not installed.', 'kwip-animation' ), array( 'status' => 404 ) );
 		}
 
-		$config = KWIPA_Config::get_config();
+		$config = KWIPA_Config::get_scoped_config();
 		$usages = KWIPA_Motions::usages( $id, $config );
 		$body   = $request->get_json_params();
 		$force  = is_array( $body ) && isset( $body['force'] ) && true === $body['force'];
@@ -164,10 +169,52 @@ final class KWIPA_REST {
 			array(
 				'success'           => true,
 				'removedAnimations' => count( $usages ),
-				'library'           => KWIPA_Motions::library( KWIPA_Config::get_config() ),
+				'library'           => KWIPA_Motions::library( KWIPA_Config::get_scoped_config() ),
 			)
 		);
 	}
+
+	public static function handle_get() {
+		return rest_ensure_response(
+			array( 'config' => KWIPA_Config::as_scoped_object( KWIPA_Config::get_scoped_config() ) )
+		);
+	}
+
+	public static function handle_save( WP_REST_Request $request ) {
+		if ( strlen( (string) $request->get_body() ) > self::MAX_PAYLOAD_BYTES ) {
+			return new WP_Error(
+				'kwipa_payload_too_large',
+				__( 'The configuration is too large to save.', 'kwip-animation' ),
+				array( 'status' => 413 )
+			);
+		}
+
+		$body = $request->get_json_params();
+		$raw  = ( is_array( $body ) && isset( $body['config'] ) ) ? $body['config'] : null;
+
+		$clean = KWIPA_Config::sanitize( $raw );
+		if ( is_wp_error( $clean ) ) {
+			return $clean;
+		}
+
+		if ( ! KWIPA_Config::save( $clean ) ) {
+			return new WP_Error(
+				'kwipa_save_failed',
+				__( 'The configuration could not be saved.', 'kwip-animation' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		do_action( 'kwipa_config_saved', $clean );
+
+		return rest_ensure_response(
+			array(
+				'success' => true,
+				'config'  => KWIPA_Config::as_scoped_object( $clean ),
+			)
+		);
+	}
+
 
 	/**
 	 * Values the admin React app (Step 3) needs to talk to this API.
@@ -208,57 +255,5 @@ final class KWIPA_REST {
 		}
 
 		return true;
-	}
-
-	public static function handle_get() {
-		return rest_ensure_response(
-			array( 'config' => KWIPA_Config::as_object( KWIPA_Config::get_config() ) )
-		);
-	}
-
-	/**
-	 *
-	 * @param WP_REST_Request $request Incoming request.
-	 * @return WP_REST_Response|WP_Error
-	 */
-	public static function handle_save( WP_REST_Request $request ) {
-		if ( strlen( (string) $request->get_body() ) > self::MAX_PAYLOAD_BYTES ) {
-			return new WP_Error(
-				'kwipa_payload_too_large',
-				__( 'The configuration is too large to save.', 'kwip-animation' ),
-				array( 'status' => 413 )
-			);
-		}
-
-		$body = $request->get_json_params();
-		$raw  = ( is_array( $body ) && isset( $body['config'] ) ) ? $body['config'] : null;
-
-		$clean = KWIPA_Config::sanitize( $raw );
-		if ( is_wp_error( $clean ) ) {
-			return $clean;
-		}
-
-		if ( ! KWIPA_Config::save( $clean ) ) {
-			return new WP_Error(
-				'kwipa_save_failed',
-				__( 'The configuration could not be saved.', 'kwip-animation' ),
-				array( 'status' => 500 )
-			);
-		}
-
-		/**
-		 * Fires after a successful save. Hook here to purge page caches, since the
-		 * config is inlined into the HTML of cached pages.
-		 *
-		 * @param array $clean The sanitized config that was stored.
-		 */
-		do_action( 'kwipa_config_saved', $clean );
-
-		return rest_ensure_response(
-			array(
-				'success' => true,
-				'config'  => KWIPA_Config::as_object( $clean ),
-			)
-		);
 	}
 }

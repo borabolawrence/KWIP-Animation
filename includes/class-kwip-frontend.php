@@ -5,45 +5,74 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Public-site output. When animations exist it loads only:
- *   GSAP core, ScrollTrigger (only if a scroll trigger is configured),
- *   kwip-engine.js, and the config as an inline JSON global.
- * No config means no output at all: zero cost for pages with nothing to animate.
+ * Public-site output. Resolves active rules for the current page path; if no
+ * global or page-specific animations match, nothing is printed or enqueued.
  */
 final class KWIPA_Frontend {
 
-	private static $config = null;
+	private static $rules = null;
 
 	public static function init() {
 		add_action( 'wp_head', array( __CLASS__, 'print_prehide' ), 1 );
 		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue' ) );
 	}
 
-	private static function config() {
-		if ( null === self::$config ) {
-			self::$config = KWIPA_Config::get_config();
+	/**
+	 * Resolve the current public request path normalized to "/" or "/slug/".
+	 *
+	 * @return string
+	 */
+	private static function current_path() {
+		$request_uri  = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '/';
+		$request_path = (string) wp_parse_url( $request_uri, PHP_URL_PATH );
+		$home_path    = (string) wp_parse_url( home_url( '/' ), PHP_URL_PATH );
+
+		if ( '' !== $home_path && '/' !== $home_path && 0 === strpos( $request_path, $home_path ) ) {
+			$request_path = '/' . ltrim( substr( $request_path, strlen( $home_path ) ), '/' );
 		}
-		return self::$config;
+
+		return KWIPA_Config::normalize_path( $request_path );
 	}
 
+	private static function rules() {
+		if ( null === self::$rules ) {
+			self::$rules = KWIPA_Config::get_active_rules( self::current_path() );
+		}
+		return self::$rules;
+	}
 
 	private static function should_run() {
 		if ( KWIPA_Admin::is_builder_request() || is_customize_preview() ) {
 			return false;
 		}
-		return ! empty( self::config() );
+		return ! empty( self::rules() );
 	}
 
 	/**
-	 * Entrance animations would flash: the element paints, then jumps to its
-	 * start state. So elements with a load or scroll trigger are hidden from the
-	 * first paint, and the engine reveals them once their start state is applied.
+	 * Map responsive breakpoint keys to CSS @media queries so mobile elements are
+	 * never hidden when an entrance animation is scoped to desktop/tablet only.
 	 *
-	 * Failsafes, so content can never stay invisible:
-	 *  - rules only apply when JS is on (html.kwipa-js is set by the tiny script below);
-	 *  - a CSS animation reveals everything after 2s even if the engine never runs;
-	 *  - nothing is hidden for visitors who prefer reduced motion;
-	 *  - one rule per selector, because one invalid selector would void a whole group.
+	 * @param string $breakpoint Breakpoint key.
+	 * @return string
+	 */
+	private static function media_for_breakpoint( $breakpoint ) {
+		switch ( $breakpoint ) {
+			case 'desktop':
+				return '(min-width:1025px)';
+			case 'not-mobile':
+				return '(min-width:768px)';
+			case 'tablet':
+				return '(min-width:768px) and (max-width:1024px)';
+			case 'mobile':
+				return '(max-width:767px)';
+			default:
+				return '';
+		}
+	}
+
+	/**
+	 * Pre-hide entrance animations (load and non-scrub scroll) before first paint.
+	 * Effect animations start from natural state and are never hidden.
 	 */
 	public static function print_prehide() {
 		if ( ! self::should_run() ) {
@@ -51,15 +80,33 @@ final class KWIPA_Frontend {
 		}
 
 		$rules = array();
-		foreach ( self::config() as $selector => $triggers ) {
-			if ( ! is_array( $triggers ) || ( ! isset( $triggers['load'] ) && ! isset( $triggers['scroll'] ) ) ) {
+		foreach ( self::rules() as $selector => $triggers ) {
+			if ( ! is_array( $triggers ) ) {
 				continue;
 			}
 			$clean = KWIPA_Config::sanitize_selector( (string) $selector );
 			if ( '' === $clean ) {
 				continue;
 			}
-			$rules[] = '.kwipa-js ' . $clean . '{visibility:hidden;animation:kwipa-reveal 0s linear 2s forwards}';
+
+			foreach ( array( 'load', 'scroll' ) as $trig_name ) {
+				if ( ! isset( $triggers[ $trig_name ] ) || ! is_array( $triggers[ $trig_name ] ) ) {
+					continue;
+				}
+				$settings = $triggers[ $trig_name ];
+				if ( 'scroll' === $trig_name && ! empty( $settings['scroll']['scrub'] ) ) {
+					continue;
+				}
+				$motion = isset( $settings['animation'] ) ? KWIPA_Motions::get( $settings['animation'] ) : null;
+				if ( ! $motion || 'entrance' !== $motion['kind'] ) {
+					continue;
+				}
+
+				$rule  = '.kwipa-js ' . $clean . '{visibility:hidden;animation:kwipa-reveal 0s linear 2s forwards}';
+				$media = isset( $settings['breakpoint'] ) ? self::media_for_breakpoint( $settings['breakpoint'] ) : '';
+				$rules[] = '' !== $media ? '@media ' . $media . '{' . $rule . '}' : $rule;
+				break;
+			}
 		}
 
 		if ( empty( $rules ) ) {
@@ -75,9 +122,11 @@ final class KWIPA_Frontend {
 			return;
 		}
 
+		$active     = self::rules();
 		$has_scroll = false;
 		$slugs      = array();
-		foreach ( self::config() as $triggers ) {
+
+		foreach ( $active as $triggers ) {
 			if ( ! is_array( $triggers ) ) {
 				continue;
 			}
@@ -97,7 +146,7 @@ final class KWIPA_Frontend {
 
 		wp_add_inline_script(
 			'kwipa-engine',
-			'window.KWIPAMotions = ' . KWIPA_Config::encode( $motions ) . ';window.KWIPAnimationConfig = ' . KWIPA_Config::get_config_json() . ';',
+			'window.KWIPAMotions = ' . KWIPA_Config::encode( $motions ) . ';window.KWIPAnimationConfig = ' . KWIPA_Config::encode( $active ) . ';',
 			'before'
 		);
 		wp_enqueue_script( 'kwipa-engine' );

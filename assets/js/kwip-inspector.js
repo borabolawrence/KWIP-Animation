@@ -1,25 +1,3 @@
-/**
- * KWIP Animation - Inspector Bridge
- *
- * Runs ONLY inside the builder iframe (KWIPA_Admin enqueues it there; the public
- * site never loads this file). Depends on kwip-engine.js, which owns the preset
- * table and the tween logic, so a preview here runs the same code as the live site.
- *
- * Messages iframe -> parent (all carry source: 'kwipa-inspector'):
- *   ready           { gsap, scrollTrigger }
- *   select          { selector, tag, id, classes, label }
- *   preview-started { selector, trigger, matches }
- *   error           { code, message }
- *
- * Messages parent -> iframe (must carry source: 'kwipa-builder'):
- *   ping                                   -> replies with 'ready'
- *   highlight { selector|null }            -> persistent outline (null clears)
- *   preview   { selector, trigger, settings: { animation, duration, delay } }
- *   clear     { selector? }                -> kill previews, restore elements
- *
- * Config (printed by PHP before this file):
- *   window.KWIPABridgeConfig = { parentOrigin: 'https://example.com' }
- */
 (function () {
     'use strict';
 
@@ -36,17 +14,37 @@
     const MAX_LEN = 255;
     const Engine = window.KWIPAEngine;
 
-    const SELECTOR_OK = /^[\p{L}\p{N}_\-#.>+~:()*\\\/ ]+$/u;
-
+    const ATTR_TOKEN = /^\[[a-zA-Z][a-zA-Z0-9_-]*(?:[~|^$*]?="[a-zA-Z0-9 _.:-]{1,64}")?\]$/;
+    const BASE_SELECTOR_OK = /^[\p{L}\p{N}_\-#.>+~:()*\\\/ ]+$/u;
     const STATE_CLASS = /^(active|current|open|opened|show|shown|hide|hidden|visible|hover|focus|focused|selected|disabled|loading|loaded|ready|animated|in-?view|is-[\w-]+|aos-[\w-]+|kwipa-[\w-]+)$/i;
     const UNSTABLE = /\d{5,}|^(css|sc|jsx|svelte|emotion|styled)-[a-z0-9]+$/i;
+
+    function isSelectorSafe(selector) {
+        if (typeof selector !== 'string' || !selector || selector.length > MAX_LEN || selector.indexOf('</') !== -1) {
+            return false;
+        }
+        let invalidAttr = false;
+        const stripped = selector.replace(/\[[^\]]*\]/g, (token) => {
+            if (!ATTR_TOKEN.test(token)) {
+                invalidAttr = true;
+            }
+            return '__ATTR__';
+        });
+        if (invalidAttr || stripped.indexOf('[') !== -1 || stripped.indexOf(']') !== -1) {
+            return false;
+        }
+        if (/[>+~\\]$/.test(stripped)) {
+            return false;
+        }
+        return BASE_SELECTOR_OK.test(stripped);
+    }
 
     function post(payload) {
         payload.source = MSG_OUT;
         try {
             window.parent.postMessage(payload, PARENT_ORIGIN);
         } catch (e) {
-            // Parent is gone; nothing to do.
+            // Parent unavailable.
         }
     }
 
@@ -59,7 +57,7 @@
     }
 
     function isUnique(selector, el) {
-        if (selector.length > MAX_LEN || !SELECTOR_OK.test(selector)) {
+        if (!isSelectorSafe(selector)) {
             return false;
         }
         try {
@@ -76,7 +74,7 @@
             return '';
         }
         const token = '#' + esc(id);
-        if (!SELECTOR_OK.test(token)) {
+        if (!isSelectorSafe(token)) {
             return '';
         }
         try {
@@ -86,6 +84,22 @@
         }
     }
 
+    function stableDataAttrs(el) {
+        const out = [];
+        Array.prototype.forEach.call(el.attributes, (attr) => {
+            if (attr.name.indexOf('data-') !== 0 || /^data-(kwipa|wp-|elementor|vc-|et-)/i.test(attr.name)) {
+                return;
+            }
+            const token = attr.value && /^[a-zA-Z0-9 _.:-]{1,40}$/.test(attr.value)
+                ? '[' + attr.name + '="' + attr.value + '"]'
+                : '[' + attr.name + ']';
+            if (isSelectorSafe(token)) {
+                out.push(token);
+            }
+        });
+        return out.slice(0, 3);
+    }
+
     function stableClasses(el) {
         const out = [];
         Array.prototype.forEach.call(el.classList, (name) => {
@@ -93,7 +107,7 @@
                 return;
             }
             const token = '.' + esc(name);
-            if (SELECTOR_OK.test(token)) {
+            if (isSelectorSafe(token)) {
                 out.push(token);
             }
         });
@@ -101,14 +115,16 @@
     }
 
     function simpleCandidates(el) {
-        const tag = SELECTOR_OK.test(el.localName) ? el.localName : '';
+        const tag = isSelectorSafe(el.localName) ? el.localName : '';
         const id = stableId(el);
+        const attrs = stableDataAttrs(el);
         const classes = stableClasses(el).slice(0, 6);
         const list = [];
 
         if (id) {
             list.push(id);
         }
+        attrs.forEach((a) => list.push(a));
         classes.forEach((c) => list.push(c));
         if (tag) {
             classes.forEach((c) => list.push(tag + c));
@@ -140,7 +156,7 @@
         if (id) {
             return id;
         }
-        let part = SELECTOR_OK.test(node.localName) ? node.localName : '*';
+        let part = isSelectorSafe(node.localName) ? node.localName : '*';
         part += stableClasses(node).slice(0, 2).join('');
 
         const parent = node.parentElement;
@@ -163,10 +179,6 @@
         return part;
     }
 
-    /**
-     * @param {Element} el
-     * @return {string} A unique, server-acceptable selector, or '' if none exists.
-     */
     function buildSelector(el) {
         const simple = simpleCandidates(el);
         for (let i = 0; i < simple.length; i++) {
@@ -192,7 +204,7 @@
     }
 
     function safeQuery(selector) {
-        if (typeof selector !== 'string' || !selector || selector.length > MAX_LEN || !SELECTOR_OK.test(selector)) {
+        if (!isSelectorSafe(selector)) {
             return [];
         }
         try {
@@ -208,9 +220,22 @@
             text += '#' + el.getAttribute('id');
         }
         if (el.classList.length) {
-            text += '.' + Array.prototype.slice.call(el.classList, 0, 3).join('.');
+            text += '.' + Array.prototype.slice.call(el.classList, 0, 2).join('.');
         }
         return text;
+    }
+
+    function collectAncestors(el) {
+        const chain = [];
+        let node = el;
+        while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement && chain.length < 6) {
+            const sel = buildSelector(node);
+            if (sel) {
+                chain.unshift({ selector: sel, label: describe(node) });
+            }
+            node = node.parentElement;
+        }
+        return chain;
     }
 
     let hoverBox, selectBox, label;
@@ -227,11 +252,15 @@
         root.innerHTML =
             '<style>' +
             '.box{position:fixed;display:none;box-sizing:border-box;pointer-events:none}' +
-            '.hover{outline:2px dashed #2271b1;outline-offset:-1px;background:rgba(34,113,177,.1)}' +
-            '.select{outline:2px solid #00a32a;outline-offset:-1px;background:rgba(0,163,42,.1)}' +
-            '.label{position:fixed;display:none;font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;color:#fff;background:#2271b1;padding:0 6px;border-radius:2px;white-space:nowrap;max-width:60vw;overflow:hidden;text-overflow:ellipsis;pointer-events:none}' +
+            '.hover{outline:1.5px dashed #38bdf8;outline-offset:-1px;background:rgba(56,189,248,.07)}' +
+            '.select{outline:2px solid #88ce02;outline-offset:-1px;background:rgba(136,206,2,.08);box-shadow:0 0 0 1px rgba(9,11,15,.45)}' +
+            '.handle{position:absolute;width:6px;height:6px;background:#9ef01a;border:1.5px solid #090b0f;border-radius:1.5px}' +
+            '.tl{top:-4px;left:-4px}.tr{top:-4px;right:-4px}.bl{bottom:-4px;left:-4px}.br{bottom:-4px;right:-4px}' +
+            '.label{position:fixed;display:none;font:600 11px/1.6 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#f3f5f8;background:#11141b;border:1px solid rgba(255,255,255,.16);padding:1px 7px;border-radius:5px;box-shadow:0 4px 12px rgba(0,0,0,.45);white-space:nowrap;max-width:60vw;overflow:hidden;text-overflow:ellipsis;pointer-events:none}' +
             '</style>' +
-            '<div class="box hover"></div><div class="box select"></div><div class="label"></div>';
+            '<div class="box hover"></div>' +
+            '<div class="box select"><i class="handle tl"></i><i class="handle tr"></i><i class="handle bl"></i><i class="handle br"></i></div>' +
+            '<div class="label"></div>';
 
         hoverBox = root.querySelector('.hover');
         selectBox = root.querySelector('.select');
@@ -256,11 +285,12 @@
         const r = place(hoverBox, hoverEl);
 
         if (r) {
-            const text = describe(hoverEl);
+            const dims = Math.round(r.width) + '\u00d7' + Math.round(r.height);
+            const text = describe(hoverEl) + ' \u00b7 ' + dims;
             if (label.textContent !== text) {
                 label.textContent = text;
             }
-            label.style.cssText = 'display:block;left:' + r.left + 'px;top:' + (r.top > 22 ? r.top - 20 : r.top + 2) + 'px';
+            label.style.cssText = 'display:block;left:' + r.left + 'px;top:' + (r.top > 26 ? r.top - 24 : r.top + 4) + 'px';
         } else {
             label.style.display = 'none';
         }
@@ -302,6 +332,8 @@
             id: el.getAttribute('id') || '',
             classes: Array.prototype.slice.call(el.classList, 0, 20),
             label: describe(el),
+            ancestors: collectAncestors(el),
+            matches: safeQuery(selector).length,
         });
     }
 
@@ -356,7 +388,7 @@
             return;
         }
         entry.listeners.forEach((l) => l.el.removeEventListener(l.type, l.fn));
-        entry.triggers.forEach((t) => t.kill());
+        entry.triggers.forEach((t) => t.kill(true));
         entry.tweens.forEach((t) => t.kill());
         entry.calls.forEach((c) => c.kill());
         entry.els.forEach(restore);
@@ -399,28 +431,38 @@
         }
 
         const key = msg.selector + '|' + msg.trigger;
-
         teardown(key);
 
         const entry = { els, tweens: [], listeners: [], triggers: [], calls: [] };
         registry.set(key, entry);
         els.forEach(remember);
 
+        const extra = r.stagger > 0 ? { stagger: r.stagger } : null;
+
         if (msg.trigger === 'load' || msg.trigger === 'click') {
-            entry.tweens.push(Engine.play(els, r.preset, r.duration, r.delay, null, true));
+            entry.tweens.push(Engine.play(els, r.preset, r.duration, r.delay, extra, true));
 
         } else if (msg.trigger === 'scroll') {
             const ST = window.ScrollTrigger;
             if (!ST) {
                 fail('scrolltrigger_missing', 'ScrollTrigger is not loaded; playing the animation immediately instead.');
             }
-            els.forEach((el) => {
-                const armed = Engine.scroll(el, r, ST, true);
+            const showMarkers = !!(settings.scroll && settings.scroll.markers);
+            if (r.stagger > 0 && els.length > 1 && !r.scroll.pin) {
+                const armed = Engine.scroll(els, r, ST, true, showMarkers);
                 entry.tweens.push(armed.tween);
                 if (armed.trigger) {
                     entry.triggers.push(armed.trigger);
                 }
-            });
+            } else {
+                els.forEach((el) => {
+                    const armed = Engine.scroll(el, r, ST, true, showMarkers);
+                    entry.tweens.push(armed.tween);
+                    if (armed.trigger) {
+                        entry.triggers.push(armed.trigger);
+                    }
+                });
+            }
             if (ST) {
                 const rect = els[0].getBoundingClientRect();
                 if (rect.top < 0 || rect.bottom > window.innerHeight) {
@@ -450,9 +492,14 @@
     }
 
     function highlight(selector) {
-        const el = selector ? safeQuery(selector)[0] : null;
-        selectedEl = el || null;
+        const matches = selector ? safeQuery(selector) : [];
+        const el = matches[0] || null;
+        selectedEl = el;
         refresh();
+
+        if (selector) {
+            post({ type: 'matched', selector, matches: matches.length });
+        }
 
         if (el) {
             const r = el.getBoundingClientRect();
@@ -486,7 +533,6 @@
                 break;
         }
     }
-
 
     ['click', 'dblclick', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'submit'].forEach((type) => {
         window.addEventListener(type, type === 'click' ? onClick : block, true);

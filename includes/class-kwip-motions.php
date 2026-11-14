@@ -197,17 +197,21 @@ final class KWIPA_Motions {
 		}
 		self::$installed_motions = array();
 
-		foreach ( self::installed() as $raw ) {
-			$pack = self::sanitize_pack( $raw );
-			if ( is_wp_error( $pack ) ) {
+		foreach ( self::installed() as $pack ) {
+			if ( ! is_array( $pack ) || empty( $pack['id'] ) || empty( $pack['motions'] ) || ! is_array( $pack['motions'] ) ) {
 				continue;
 			}
 			foreach ( $pack['motions'] as $name => $motion ) {
-				self::$installed_motions[ $pack['id'] . '/' . $name ] = self::decorate( $motion, $pack['id'] );
+				if ( is_array( $motion ) ) {
+					self::$installed_motions[ $pack['id'] . '/' . $name ] = self::decorate( $motion, $pack['id'] );
+				}
 			}
 		}
 		return self::$installed_motions;
 	}
+
+	
+	
 
 	private static function decorate( array $motion, $pack_id ) {
 		$motion['pack'] = $pack_id;
@@ -549,21 +553,45 @@ final class KWIPA_Motions {
 
 
 	/**
-	 * Everything the library screen shows: built-in and installed packs, how many
-	 * saved animations use each, and which elements (installed packs only).
+	 * Flatten a v2 scoped config (or legacy flat map) into a list of
+	 * { scope, selector, triggers } entries.
 	 *
-	 * @param array $config Saved animation config.
+	 * @param array $config Scoped or flat config.
+	 * @return array[]
+	 */
+	private static function flatten_config( array $config ) {
+		$scopes = ( isset( $config['scopes'] ) && is_array( $config['scopes'] ) )
+			? $config['scopes']
+			: array( 'global' => $config );
+
+		$entries = array();
+		foreach ( $scopes as $scope => $selectors ) {
+			if ( ! is_array( $selectors ) ) {
+				continue;
+			}
+			foreach ( $selectors as $selector => $triggers ) {
+				if ( is_array( $triggers ) ) {
+					$entries[] = array(
+						'scope'    => (string) $scope,
+						'selector' => (string) $selector,
+						'triggers' => $triggers,
+					);
+				}
+			}
+		}
+		return $entries;
+	}
+
+	/**
+	 * @param array $config Scoped animation config.
 	 * @return array { builtin: pack[], installed: pack[] }
 	 */
 	public static function library( array $config ) {
-		self::builtin(); // Populates $builtin_packs.
+		self::builtin();
 
 		$used = array();
-		foreach ( $config as $triggers ) {
-			if ( ! is_array( $triggers ) ) {
-				continue;
-			}
-			foreach ( $triggers as $settings ) {
+		foreach ( self::flatten_config( $config ) as $entry ) {
+			foreach ( $entry['triggers'] as $settings ) {
 				$motion = ( is_array( $settings ) && isset( $settings['animation'] ) ) ? self::get( $settings['animation'] ) : null;
 				if ( $motion ) {
 					$used[ $motion['pack'] ] = ( isset( $used[ $motion['pack'] ] ) ? $used[ $motion['pack'] ] : 0 ) + 1;
@@ -603,9 +631,8 @@ final class KWIPA_Motions {
 		foreach ( self::$builtin_packs as $pack ) {
 			$out['builtin'][] = $summarize( $pack, true );
 		}
-		foreach ( self::installed() as $raw ) {
-			$pack = self::sanitize_pack( $raw );
-			if ( ! is_wp_error( $pack ) ) {
+		foreach ( self::installed() as $pack ) {
+			if ( is_array( $pack ) && ! empty( $pack['id'] ) && ! empty( $pack['motions'] ) ) {
 				$out['installed'][] = $summarize( $pack, false );
 			}
 		}
@@ -613,26 +640,22 @@ final class KWIPA_Motions {
 	}
 
 	/**
-	 * Saved animations that use a motion from an installed pack.
-	 *
 	 * @param string $pack_id Pack id.
-	 * @param array  $config  Saved animation config.
-	 * @return array[] Each { selector, trigger, animation }.
+	 * @param array  $config  Scoped animation config.
+	 * @return array[]
 	 */
 	public static function usages( $pack_id, array $config ) {
 		$found = array();
-		foreach ( $config as $selector => $triggers ) {
-			if ( ! is_array( $triggers ) ) {
-				continue;
-			}
-			foreach ( $triggers as $trigger => $settings ) {
+		foreach ( self::flatten_config( $config ) as $entry ) {
+			foreach ( $entry['triggers'] as $trigger => $settings ) {
 				if ( ! is_array( $settings ) || empty( $settings['animation'] ) ) {
 					continue;
 				}
 				$slug = (string) $settings['animation'];
 				if ( 0 === strpos( $slug, $pack_id . '/' ) ) {
 					$found[] = array(
-						'selector'  => (string) $selector,
+						'scope'     => $entry['scope'],
+						'selector'  => $entry['selector'],
 						'trigger'   => (string) $trigger,
 						'animation' => $slug,
 					);
@@ -643,49 +666,60 @@ final class KWIPA_Motions {
 	}
 
 	/**
-	 * The config without any animation that uses the given pack. Elements left
-	 * with no triggers are dropped.
+	 * Remove any trigger using the given pack across all scopes.
 	 *
 	 * @param string $pack_id Pack id.
-	 * @param array  $config  Saved animation config.
+	 * @param array  $config  Scoped animation config.
 	 * @return array
 	 */
 	public static function strip_usages( $pack_id, array $config ) {
-		$clean = array();
-		foreach ( $config as $selector => $triggers ) {
-			if ( ! is_array( $triggers ) ) {
+		$scopes = ( isset( $config['scopes'] ) && is_array( $config['scopes'] ) )
+			? $config['scopes']
+			: array( 'global' => $config );
+
+		$clean_scopes = array();
+		foreach ( $scopes as $scope => $selectors ) {
+			if ( ! is_array( $selectors ) ) {
 				continue;
 			}
-			foreach ( $triggers as $trigger => $settings ) {
-				$slug = ( is_array( $settings ) && isset( $settings['animation'] ) ) ? (string) $settings['animation'] : '';
-				if ( 0 === strpos( $slug, $pack_id . '/' ) ) {
-					unset( $triggers[ $trigger ] );
+			$clean_selectors = array();
+			foreach ( $selectors as $selector => $triggers ) {
+				if ( ! is_array( $triggers ) ) {
+					continue;
+				}
+				foreach ( $triggers as $trigger => $settings ) {
+					$slug = ( is_array( $settings ) && isset( $settings['animation'] ) ) ? (string) $settings['animation'] : '';
+					if ( 0 === strpos( $slug, $pack_id . '/' ) ) {
+						unset( $triggers[ $trigger ] );
+					}
+				}
+				if ( ! empty( $triggers ) ) {
+					$clean_selectors[ $selector ] = $triggers;
 				}
 			}
-			if ( $triggers ) {
-				$clean[ $selector ] = $triggers;
+			if ( ! empty( $clean_selectors ) ) {
+				$clean_scopes[ $scope ] = $clean_selectors;
 			}
 		}
-		return $clean;
+
+		return array(
+			'version' => KWIPA_Config::SCHEMA_VERSION,
+			'scopes'  => $clean_scopes,
+		);
 	}
 
 	/**
-	 * Saved animations whose motion no longer exists (e.g. after a pack update
-	 * dropped it).
-	 *
-	 * @param array $config Saved animation config.
-	 * @return array[] Each { selector, trigger, animation }.
+	 * @param array $config Scoped animation config.
+	 * @return array[]
 	 */
 	public static function orphans( array $config ) {
 		$found = array();
-		foreach ( $config as $selector => $triggers ) {
-			if ( ! is_array( $triggers ) ) {
-				continue;
-			}
-			foreach ( $triggers as $trigger => $settings ) {
+		foreach ( self::flatten_config( $config ) as $entry ) {
+			foreach ( $entry['triggers'] as $trigger => $settings ) {
 				if ( is_array( $settings ) && isset( $settings['animation'] ) && null === self::get( $settings['animation'] ) ) {
 					$found[] = array(
-						'selector'  => (string) $selector,
+						'scope'     => $entry['scope'],
+						'selector'  => $entry['selector'],
 						'trigger'   => (string) $trigger,
 						'animation' => (string) $settings['animation'],
 					);

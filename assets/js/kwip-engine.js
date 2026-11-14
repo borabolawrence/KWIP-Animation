@@ -1,22 +1,3 @@
-/**
- * KWIP Animation - Frontend engine (vanilla JS, no dependencies besides GSAP).
- *
- * Reads window.KWIPAnimationConfig (printed inline by PHP):
- *   { ".selector": { "load|scroll|hover|click": { animation, duration, delay? } } }
- *
- * Also the single source of truth for what each preset does: the builder's
- * inspector calls window.KWIPAEngine instead of keeping its own copy. When
- * window.KWIPABuilderMode is set (builder iframe only), it exposes the API
- * and does NOT auto-run, because the inspector previews animations itself.
- *
- * Preset semantics:
- *   entrance: animates FROM the given state TO the element's natural state.
- *   effect:   animates from natural TO the given state (legs > 1 = yoyo back).
- *   hold:     on hover, stays in the target state until mouseleave.
- * Slugs must match KWIPA_Config::allowed_animations().
- *
- * ES5 on purpose: this file ships to every visitor, so no build step or polyfills.
- */
 (function (window, document) {
     'use strict';
 
@@ -49,25 +30,15 @@
         gsap.registerPlugin(window.ScrollTrigger);
     }
 
-    // var PRESETS = {
-    //     'fade-in': { kind: 'entrance', from: { opacity: 0 } },
-    //     'fade-up': { kind: 'entrance', from: { opacity: 0, y: 40 } },
-    //     'fade-down': { kind: 'entrance', from: { opacity: 0, y: -40 } },
-    //     'fade-left': { kind: 'entrance', from: { opacity: 0, x: 40 } },
-    //     'fade-right': { kind: 'entrance', from: { opacity: 0, x: -40 } },
-    //     'scale-up': { kind: 'effect', to: { scale: 1.1 }, legs: 2, hold: true },
-    //     'scale-down': { kind: 'effect', to: { scale: 0.9 }, legs: 2, hold: true },
-    //     'pulse': { kind: 'effect', to: { scale: 1.12 }, legs: 4 },
-    //     'spin': { kind: 'effect', to: { rotation: '+=360' }, ease: 'power2.inOut' },
-    //     'flip-x': { kind: 'effect', to: { rotationX: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
-    //     'flip-y': { kind: 'effect', to: { rotationY: '+=360', transformPerspective: 600 }, ease: 'power2.inOut' },
-    //     'shake': { kind: 'effect', keyframes: { x: [-10, 10, -8, 8, -4, 4, 0], easeEach: 'sine.inOut' } }
-    // };
-
-    // Motion definitions printed by PHP (only the ones this page uses; the full
-    // library in the builder). See motions/core.json for the format.
     var MOTIONS = window.KWIPAMotions && typeof window.KWIPAMotions === 'object' ? window.KWIPAMotions : {};
     var TOKEN = /^(-?)\$([a-z][a-z0-9_]*)$/;
+    var EASE_OK = /^(none|linear|(power[1-4]|sine|expo|circ|back|elastic|bounce)\.(in|out|inOut)(\(\s*\d{1,3}(\.\d{1,3})?(\s*,\s*\d{1,3}(\.\d{1,3})?)?\s*\))?|steps\(\s*\d{1,3}\s*\))$/;
+    var MEDIA_QUERIES = {
+        desktop: '(min-width: 1025px)',
+        'not-mobile': '(min-width: 768px)',
+        tablet: '(min-width: 768px) and (max-width: 1024px)',
+        mobile: '(max-width: 767px)'
+    };
 
     function bind(value, def, overrides) {
         var m = typeof value === 'string' ? TOKEN.exec(value) : null;
@@ -128,20 +99,43 @@
         }).join(',');
     }
 
+    function resolveScroll(raw) {
+        var s = raw && typeof raw === 'object' ? raw : {};
+        var scrub = false;
+        if (s.scrub === true) {
+            scrub = true;
+        } else if (typeof s.scrub === 'number' && isFinite(s.scrub) && s.scrub > 0) {
+            scrub = Math.min(s.scrub, 10);
+        }
+        return {
+            start: typeof s.start === 'string' && s.start ? s.start : 'top 85%',
+            end: typeof s.end === 'string' && s.end ? s.end : 'bottom 20%',
+            scrub: scrub,
+            pin: s.pin === true,
+            toggleActions: typeof s.toggleActions === 'string' && s.toggleActions ? s.toggleActions : 'play none none none',
+            trigger: typeof s.trigger === 'string' && s.trigger ? s.trigger : ''
+        };
+    }
+
     /**
-     * Validate one trigger's settings against the loaded motions (never trust
-     * the config blindly, even though PHP sanitized it).
-     *
-     * @return {{preset:Object,duration:number,delay:number}|null}
+     * @return {{preset:Object,duration:number,delay:number,stagger:number,breakpoint:string,scroll:Object}|null}
      */
     function resolve(settings) {
         if (!settings || typeof settings !== 'object' || typeof settings.animation !== 'string' || !has(MOTIONS, settings.animation)) {
             return null;
         }
+        var preset = compile(MOTIONS[settings.animation], settings.params);
+        if (typeof settings.ease === 'string' && EASE_OK.test(settings.ease)) {
+            preset.ease = settings.ease;
+        }
+        var bp = typeof settings.breakpoint === 'string' && has(MEDIA_QUERIES, settings.breakpoint) ? settings.breakpoint : 'all';
         return {
-            preset: compile(MOTIONS[settings.animation], settings.params),
+            preset: preset,
             duration: num(settings.duration, 1, 0, 30),
-            delay: num(settings.delay, 0, 0, 30)
+            delay: num(settings.delay, 0, 0, 30),
+            stagger: num(settings.stagger, 0, 0, 5),
+            breakpoint: bp,
+            scroll: resolveScroll(settings.scroll)
         };
     }
 
@@ -176,13 +170,6 @@
         return gsap.to(els, extend(vars, extra));
     }
 
-    /**
-     * Run a preset once.
-     * @param {Element|Element[]} els
-     * @param {Object} preset Entry from PRESETS.
-     * @param {Object} [extra] Extra GSAP vars (e.g. { paused: true }).
-     * @param {boolean} [replay] Reset the entrance state first (hover/click replays).
-     */
     function play(els, preset, duration, delay, extra, replay) {
         return preset.kind === 'entrance'
             ? entrance(els, preset, duration, delay, extra, replay)
@@ -222,92 +209,211 @@
     }
 
     /**
-     * Arm a once-only scroll animation for ONE element.
-     * Without ScrollTrigger the animation plays immediately rather than never.
+     * Arm a ScrollTrigger animation (once, toggleActions, scrub parallax, or pin).
      *
      * @return {{tween:Object,trigger:Object|null}}
      */
-    function scroll(el, resolved, ST, replay) {
-        if (!ST) {
-            return { tween: play(el, resolved.preset, resolved.duration, resolved.delay, null, replay), trigger: null };
+    function scroll(target, resolved, ST, replay, previewMarkers) {
+        var sc = resolved.scroll || resolveScroll(null);
+        var extra = resolved.stagger > 0 ? { stagger: resolved.stagger } : null;
+        var defaultEl = Array.isArray(target) ? target[0] : target;
+        var triggerEl = defaultEl;
+
+        if (sc.trigger) {
+            try {
+                var custom = document.querySelector(sc.trigger);
+                if (custom) {
+                    triggerEl = custom;
+                }
+            } catch (e) {
+                // Keep default trigger element.
+            }
         }
-        var tween = play(el, resolved.preset, resolved.duration, resolved.delay, { paused: true }, replay);
-        var trigger = ST.create({
-            trigger: el,
-            start: 'top 85%',
-            once: true,
-            onEnter: function () { tween.play(); }
-        });
+
+        if (!ST) {
+            return { tween: play(target, resolved.preset, resolved.duration, resolved.delay, extra, replay), trigger: null };
+        }
+
+        var stVars = {
+            trigger: triggerEl,
+            start: sc.start,
+            end: sc.end,
+            pin: sc.pin,
+            markers: !!previewMarkers
+        };
+
+        if (sc.scrub !== false) {
+            if (resolved.preset.ease === undefined && resolved.preset.kind === 'entrance') {
+                resolved.preset.ease = 'none';
+            }
+            stVars.scrub = sc.scrub;
+            var scrubTween = play(target, resolved.preset, resolved.duration, 0, extend({ scrollTrigger: stVars }, extra), replay);
+            return { tween: scrubTween, trigger: scrubTween.scrollTrigger || null };
+        }
+
+        var tween = play(target, resolved.preset, resolved.duration, resolved.delay, extend({ paused: true }, extra), replay);
+        var isOnce = sc.toggleActions === 'play none none none' && !sc.pin;
+
+        if (isOnce) {
+            stVars.once = true;
+            stVars.onEnter = function () { tween.play(); };
+        } else {
+            stVars.toggleActions = sc.toggleActions;
+            stVars.animation = tween;
+        }
+
+        var trigger = ST.create(stVars);
         return { tween: tween, trigger: trigger };
-    }
-
-    window.KWIPAEngine = { motions: MOTIONS, resolve: resolve, play: play, hover: hover, scroll: scroll };
-
-    if (window.KWIPABuilderMode) {
-        return;
     }
 
     function bindClick(el, resolved) {
         var tween = null;
-        el.addEventListener('click', function () {
+        var handler = function () {
             if (!tween || !tween.isActive()) {
                 tween = play(el, resolved.preset, resolved.duration, resolved.delay, null, true);
             }
-        });
+        };
+        el.addEventListener('click', handler);
+        return function () {
+            el.removeEventListener('click', handler);
+            if (tween) { tween.kill(); }
+        };
     }
 
     function bindHover(el, resolved) {
         var hv = hover(el, resolved.preset, resolved.duration, resolved.delay);
         el.addEventListener('mouseenter', hv.enter);
         el.addEventListener('mouseleave', hv.leave);
+        return function () {
+            el.removeEventListener('mouseenter', hv.enter);
+            el.removeEventListener('mouseleave', hv.leave);
+            hv.kill();
+        };
     }
 
-    function run(config) {
+    function queryUnbound(root, selector, triggerName) {
+        var found;
+        try {
+            found = Array.prototype.slice.call(root.querySelectorAll(selector));
+        } catch (e) {
+            return [];
+        }
+        var attr = 'data-kwipa-' + triggerName;
+        return found.filter(function (el) {
+            if (el.getAttribute(attr) === '1') {
+                return false;
+            }
+            el.setAttribute(attr, '1');
+            return true;
+        });
+    }
+
+    function applyRule(root, selector, triggerName, resolved, ST, canHover) {
+        var els = queryUnbound(root, selector, triggerName);
+        if (!els.length) {
+            return null;
+        }
+
+        if (triggerName === 'load') {
+            var loadTween = play(els, resolved.preset, resolved.duration, resolved.delay, resolved.stagger > 0 ? { stagger: resolved.stagger } : null);
+            return function () { loadTween.kill(); };
+        }
+
+        if (triggerName === 'scroll') {
+            var armedList = [];
+            if ((resolved.stagger > 0 || resolved.scroll.pin) && els.length > 1 && !resolved.scroll.pin) {
+                armedList.push(scroll(els, resolved, ST, false, false));
+            } else {
+                els.forEach(function (el) {
+                    armedList.push(scroll(el, resolved, ST, false, false));
+                });
+            }
+            return function () {
+                armedList.forEach(function (item) {
+                    if (item.trigger) { item.trigger.kill(true); }
+                    if (item.tween) { item.tween.kill(); }
+                });
+            };
+        }
+
+        if (triggerName === 'hover' && canHover) {
+            var cleanHovers = els.map(function (el) { return bindHover(el, resolved); });
+            return function () { cleanHovers.forEach(function (fn) { fn(); }); };
+        }
+
+        if (triggerName === 'click') {
+            var cleanClicks = els.map(function (el) { return bindClick(el, resolved); });
+            return function () { cleanClicks.forEach(function (fn) { fn(); }); };
+        }
+
+        return null;
+    }
+
+    function run(config, root) {
         if (!config || typeof config !== 'object') {
             return;
         }
+        var scopeRoot = root && root.querySelectorAll ? root : document;
         var ST = window.ScrollTrigger;
         var canHover = !window.matchMedia || window.matchMedia('(hover: hover)').matches;
+        var mm = gsap.matchMedia ? gsap.matchMedia() : null;
 
         Object.keys(config).forEach(function (selector) {
             var triggers = config[selector];
-            var els;
-
-            try {
-                els = Array.prototype.slice.call(document.querySelectorAll(selector));
-            } catch (e) {
-                return;
-            }
-            if (!els.length || !triggers || typeof triggers !== 'object') {
+            if (!triggers || typeof triggers !== 'object') {
                 return;
             }
 
-            var load = resolve(triggers.load);
-            var scr = resolve(triggers.scroll);
-            var hov = resolve(triggers.hover);
-            var clk = resolve(triggers.click);
+            ['load', 'scroll', 'hover', 'click'].forEach(function (trigName) {
+                var resolved = resolve(triggers[trigName]);
+                if (!resolved) {
+                    return;
+                }
 
-            if (load) {
-                play(els, load.preset, load.duration, load.delay);
-            }
-            if (scr) {
-                els.forEach(function (el) { scroll(el, scr, ST, false); });
-            }
-            if (hov && canHover) {
-                els.forEach(function (el) { bindHover(el, hov); });
-            }
-            if (clk) {
-                els.forEach(function (el) { bindClick(el, clk); });
-            }
+                var query = resolved.breakpoint !== 'all' ? MEDIA_QUERIES[resolved.breakpoint] : '';
+                if (mm && query) {
+                    mm.add(query, function () {
+                        var cleanup = applyRule(scopeRoot, selector, trigName, resolved, ST, canHover);
+                        return function () {
+                            if (cleanup) { cleanup(); }
+                        };
+                    });
+                } else {
+                    applyRule(scopeRoot, selector, trigName, resolved, ST, canHover);
+                }
+            });
         });
+
+        if (ST && ST.refresh) {
+            ST.refresh();
+        }
     }
 
     var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+    function refresh(root) {
+        if (!reduced && !window.KWIPABuilderMode) {
+            run(window.KWIPAnimationConfig, root || document);
+        }
+    }
+
+    window.KWIPAEngine = {
+        motions: MOTIONS,
+        resolve: resolve,
+        play: play,
+        hover: hover,
+        scroll: scroll,
+        refresh: refresh
+    };
+
+    if (window.KWIPABuilderMode) {
+        return;
+    }
+
     onReady(function () {
         try {
             if (!reduced) {
-                run(window.KWIPAnimationConfig);
+                run(window.KWIPAnimationConfig, document);
             }
         } finally {
             reveal();

@@ -4,13 +4,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/**
- * Admin side of the builder:
- *  1. The "KWIP Animation" menu page (host for the React app).
- *  2. "Frame mode": a front-end request carrying ?kwipa_builder=1&kwipa_nonce=...
- *     from a logged-in admin gets the inspector bridge + GSAP injected, no admin
- *     bar, and no page caching. Anyone else sees the normal public page.
- */
 final class KWIPA_Admin {
 
 	const MENU_SLUG          = 'kwip-animation';
@@ -18,7 +11,7 @@ final class KWIPA_Admin {
 	const FRAME_NONCE_PARAM  = 'kwipa_nonce';
 	const FRAME_NONCE_ACTION = 'kwipa_frame';
 	const JSON_FLAGS         = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
-	const LIBRARY_SLUG = 'kwip-animation-library';
+	const LIBRARY_SLUG       = 'kwip-animation-library';
 
 	/** @var array Hook suffix => screen ("builder" or "library"), filled by register_menu(). */
 	private static $page_hooks = array();
@@ -33,10 +26,6 @@ final class KWIPA_Admin {
 	}
 
 	/**
-	 * True only for a front-end request from an administrator carrying a valid,
-	 * action-scoped nonce. The frontend engine (Step 4) must call this and stay
-	 * silent when it returns true, because the inspector previews animations itself.
-	 *
 	 * @return bool
 	 */
 	public static function is_builder_request() {
@@ -67,9 +56,6 @@ final class KWIPA_Admin {
 	}
 
 	/**
-	 * The admin bar would shift the page down and be clickable/selectable inside
-	 * the iframe, so it is removed in frame mode.
-	 *
 	 * @param bool $show Whether the admin bar is shown.
 	 * @return bool
 	 */
@@ -90,7 +76,7 @@ final class KWIPA_Admin {
 			'kwipa-inspector',
 			KWIPA_URL . 'assets/js/kwip-inspector.js',
 			array( 'kwipa-engine', 'kwipa-gsap', 'kwipa-scrolltrigger' ),
-			KWIPA_VERSION,
+			KWIPA_Assets::version( 'assets/js/kwip-inspector.js' ),
 			true
 		);
 
@@ -100,7 +86,6 @@ final class KWIPA_Admin {
 			'before'
 		);
 	}
-
 
 	public static function register_menu() {
 		$builder = add_menu_page(
@@ -125,12 +110,6 @@ final class KWIPA_Admin {
 		}
 	}
 
-	/**
-	 * A play triangle with a keyframe bar, as a data-URI SVG.
-	 * WordPress repaints SVG menu icons to match the admin color scheme.
-	 *
-	 * @return string
-	 */
 	private static function menu_icon() {
 		$svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path fill="#a7aaad" d="M4 3l10 7-10 7V3z"/><rect fill="#a7aaad" x="15.5" y="3" width="1.8" height="14" rx=".9"/></svg>';
 		return 'data:image/svg+xml;base64,' . base64_encode( $svg );
@@ -166,7 +145,6 @@ final class KWIPA_Admin {
 	}
 
 	/**
-	 *
 	 * @param string $view "builder" or "library".
 	 * @return array
 	 */
@@ -178,7 +156,7 @@ final class KWIPA_Admin {
 
 		if ( 'library' === $view ) {
 			return $base + array(
-				'library'    => KWIPA_Motions::library( KWIPA_Config::get_config() ),
+				'library'    => KWIPA_Motions::library( KWIPA_Config::get_scoped_config() ),
 				'limits'     => array( 'maxPackBytes' => KWIPA_REST::MAX_PACK_BYTES ),
 				'builderUrl' => admin_url( 'admin.php?page=' . self::MENU_SLUG ),
 			);
@@ -188,23 +166,68 @@ final class KWIPA_Admin {
 		$admin_origin = self::origin_of( admin_url() );
 
 		return $base + array(
-			'frame'      => array(
+			'frame'         => array(
 				'url'        => home_url( '/' ),
 				'param'      => self::FRAME_PARAM,
 				'nonceParam' => self::FRAME_NONCE_PARAM,
 				'nonce'      => wp_create_nonce( self::FRAME_NONCE_ACTION ),
 				'sameOrigin' => $home_origin === $admin_origin,
 			),
-			'config'     => KWIPA_Config::as_object( KWIPA_Config::get_config() ),
-			'animations' => KWIPA_Config::allowed_animations(),
-			'motions'    => KWIPA_Motions::admin_meta(),
-			'triggers'   => KWIPA_Config::TRIGGERS,
-			'limits'     => array(
+			'pages'         => self::site_pages(),
+			'config'        => KWIPA_Config::as_scoped_object( KWIPA_Config::get_scoped_config() ),
+			'animations'    => KWIPA_Config::allowed_animations(),
+			'motions'       => KWIPA_Motions::admin_meta(),
+			'triggers'      => KWIPA_Config::TRIGGERS,
+			'eases'         => KWIPA_Config::EASES,
+			'breakpoints'   => KWIPA_Config::BREAKPOINTS,
+			'scrollOptions' => array(
+				'starts'        => KWIPA_Config::SCROLL_STARTS,
+				'ends'          => KWIPA_Config::SCROLL_ENDS,
+				'toggleActions' => KWIPA_Config::TOGGLE_ACTIONS,
+			),
+			'limits'        => array(
 				'maxDuration' => KWIPA_Config::MAX_DURATION,
 				'maxDelay'    => KWIPA_Config::MAX_DELAY,
+				'maxStagger'  => KWIPA_Config::MAX_STAGGER,
 			),
-			'libraryUrl' => admin_url( 'admin.php?page=' . self::LIBRARY_SLUG ),
+			'libraryUrl'    => admin_url( 'admin.php?page=' . self::LIBRARY_SLUG ),
 		);
+	}
+
+	/**
+	 * @return array[]
+	 */
+	private static function site_pages() {
+		$items = array(
+			array(
+				'title' => __( 'Home (/)', 'kwip-animation' ),
+				'path'  => '/',
+			),
+		);
+
+		$posts = get_posts(
+			array(
+				'post_type'      => array( 'page', 'post' ),
+				'post_status'    => 'publish',
+				'posts_per_page' => 40,
+				'orderby'        => 'menu_order title',
+				'order'          => 'ASC',
+			)
+		);
+
+		foreach ( $posts as $post ) {
+			$permalink = get_permalink( $post );
+			$path      = $permalink ? wp_parse_url( $permalink, PHP_URL_PATH ) : '';
+			if ( ! $path || '/' === $path ) {
+				continue;
+			}
+			$items[] = array(
+				'title' => $post->post_title ? $post->post_title : $path,
+				'path'  => $path,
+			);
+		}
+
+		return $items;
 	}
 
 	private static function origin_of( $url ) {
