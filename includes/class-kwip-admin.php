@@ -180,6 +180,7 @@ final class KWIPA_Admin {
 			'triggers'      => KWIPA_Config::TRIGGERS,
 			'eases'         => KWIPA_Config::EASES,
 			'breakpoints'   => KWIPA_Config::BREAKPOINTS,
+			'stepPositions' => KWIPA_Config::STEP_POSITIONS,
 			'scrollOptions' => array(
 				'starts'        => KWIPA_Config::SCROLL_STARTS,
 				'ends'          => KWIPA_Config::SCROLL_ENDS,
@@ -189,6 +190,7 @@ final class KWIPA_Admin {
 				'maxDuration' => KWIPA_Config::MAX_DURATION,
 				'maxDelay'    => KWIPA_Config::MAX_DELAY,
 				'maxStagger'  => KWIPA_Config::MAX_STAGGER,
+				'maxSteps'    => KWIPA_Config::MAX_STEPS,
 			),
 			'libraryUrl'    => admin_url( 'admin.php?page=' . self::LIBRARY_SLUG ),
 		);

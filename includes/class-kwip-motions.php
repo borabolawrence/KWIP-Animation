@@ -592,9 +592,25 @@ final class KWIPA_Motions {
 		$used = array();
 		foreach ( self::flatten_config( $config ) as $entry ) {
 			foreach ( $entry['triggers'] as $settings ) {
-				$motion = ( is_array( $settings ) && isset( $settings['animation'] ) ) ? self::get( $settings['animation'] ) : null;
-				if ( $motion ) {
-					$used[ $motion['pack'] ] = ( isset( $used[ $motion['pack'] ] ) ? $used[ $motion['pack'] ] : 0 ) + 1;
+				if ( ! is_array( $settings ) ) {
+					continue;
+				}
+				$slugs = array();
+				if ( isset( $settings['animation'] ) ) {
+					$slugs[] = $settings['animation'];
+				}
+				if ( ! empty( $settings['steps'] ) && is_array( $settings['steps'] ) ) {
+					foreach ( $settings['steps'] as $step ) {
+						if ( is_array( $step ) && isset( $step['animation'] ) ) {
+							$slugs[] = $step['animation'];
+						}
+					}
+				}
+				foreach ( $slugs as $slug ) {
+					$motion = self::get( $slug );
+					if ( $motion ) {
+						$used[ $motion['pack'] ] = ( isset( $used[ $motion['pack'] ] ) ? $used[ $motion['pack'] ] : 0 ) + 1;
+					}
 				}
 			}
 		}
@@ -648,17 +664,29 @@ final class KWIPA_Motions {
 		$found = array();
 		foreach ( self::flatten_config( $config ) as $entry ) {
 			foreach ( $entry['triggers'] as $trigger => $settings ) {
-				if ( ! is_array( $settings ) || empty( $settings['animation'] ) ) {
+				if ( ! is_array( $settings ) ) {
 					continue;
 				}
-				$slug = (string) $settings['animation'];
-				if ( 0 === strpos( $slug, $pack_id . '/' ) ) {
-					$found[] = array(
-						'scope'     => $entry['scope'],
-						'selector'  => $entry['selector'],
-						'trigger'   => (string) $trigger,
-						'animation' => $slug,
-					);
+				$slugs = array();
+				if ( ! empty( $settings['animation'] ) ) {
+					$slugs[] = (string) $settings['animation'];
+				}
+				if ( ! empty( $settings['steps'] ) && is_array( $settings['steps'] ) ) {
+					foreach ( $settings['steps'] as $step ) {
+						if ( is_array( $step ) && ! empty( $step['animation'] ) ) {
+							$slugs[] = (string) $step['animation'];
+						}
+					}
+				}
+				foreach ( $slugs as $slug ) {
+					if ( 0 === strpos( $slug, $pack_id . '/' ) ) {
+						$found[] = array(
+							'scope'     => $entry['scope'],
+							'selector'  => $entry['selector'],
+							'trigger'   => (string) $trigger,
+							'animation' => $slug,
+						);
+					}
 				}
 			}
 		}
@@ -666,7 +694,7 @@ final class KWIPA_Motions {
 	}
 
 	/**
-	 * Remove any trigger using the given pack across all scopes.
+	 * Remove any trigger or timeline step using the given pack across all scopes.
 	 *
 	 * @param string $pack_id Pack id.
 	 * @param array  $config  Scoped animation config.
@@ -691,6 +719,21 @@ final class KWIPA_Motions {
 					$slug = ( is_array( $settings ) && isset( $settings['animation'] ) ) ? (string) $settings['animation'] : '';
 					if ( 0 === strpos( $slug, $pack_id . '/' ) ) {
 						unset( $triggers[ $trigger ] );
+						continue;
+					}
+					if ( is_array( $settings ) && ! empty( $settings['steps'] ) && is_array( $settings['steps'] ) ) {
+						$remaining_steps = array();
+						foreach ( $settings['steps'] as $step ) {
+							$step_slug = ( is_array( $step ) && isset( $step['animation'] ) ) ? (string) $step['animation'] : '';
+							if ( 0 !== strpos( $step_slug, $pack_id . '/' ) ) {
+								$remaining_steps[] = $step;
+							}
+						}
+						if ( empty( $remaining_steps ) ) {
+							unset( $triggers[ $trigger ]['steps'] );
+						} else {
+							$triggers[ $trigger ]['steps'] = $remaining_steps;
+						}
 					}
 				}
 				if ( ! empty( $triggers ) ) {
@@ -716,18 +759,35 @@ final class KWIPA_Motions {
 		$found = array();
 		foreach ( self::flatten_config( $config ) as $entry ) {
 			foreach ( $entry['triggers'] as $trigger => $settings ) {
-				if ( is_array( $settings ) && isset( $settings['animation'] ) && null === self::get( $settings['animation'] ) ) {
-					$found[] = array(
-						'scope'     => $entry['scope'],
-						'selector'  => $entry['selector'],
-						'trigger'   => (string) $trigger,
-						'animation' => (string) $settings['animation'],
-					);
+				if ( ! is_array( $settings ) ) {
+					continue;
+				}
+				$slugs = array();
+				if ( isset( $settings['animation'] ) ) {
+					$slugs[] = (string) $settings['animation'];
+				}
+				if ( ! empty( $settings['steps'] ) && is_array( $settings['steps'] ) ) {
+					foreach ( $settings['steps'] as $step ) {
+						if ( is_array( $step ) && isset( $step['animation'] ) ) {
+							$slugs[] = (string) $step['animation'];
+						}
+					}
+				}
+				foreach ( $slugs as $slug ) {
+					if ( null === self::get( $slug ) ) {
+						$found[] = array(
+							'scope'     => $entry['scope'],
+							'selector'  => $entry['selector'],
+							'trigger'   => (string) $trigger,
+							'animation' => $slug,
+						);
+					}
 				}
 			}
 		}
 		return $found;
 	}
+	
 
 	private static function is_num( $value ) {
 		return ( is_int( $value ) || is_float( $value ) ) && is_finite( (float) $value );

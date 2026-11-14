@@ -137,6 +137,13 @@ final class KWIPA_Frontend {
 				if ( is_array( $settings ) && isset( $settings['animation'] ) ) {
 					$slugs[] = $settings['animation'];
 				}
+				if ( is_array( $settings ) && ! empty( $settings['steps'] ) && is_array( $settings['steps'] ) ) {
+					foreach ( $settings['steps'] as $step ) {
+						if ( is_array( $step ) && isset( $step['animation'] ) ) {
+							$slugs[] = $step['animation'];
+						}
+					}
+				}
 			}
 		}
 

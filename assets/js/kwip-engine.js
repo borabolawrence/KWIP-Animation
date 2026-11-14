@@ -33,6 +33,7 @@
     var MOTIONS = window.KWIPAMotions && typeof window.KWIPAMotions === 'object' ? window.KWIPAMotions : {};
     var TOKEN = /^(-?)\$([a-z][a-z0-9_]*)$/;
     var EASE_OK = /^(none|linear|(power[1-4]|sine|expo|circ|back|elastic|bounce)\.(in|out|inOut)(\(\s*\d{1,3}(\.\d{1,3})?(\s*,\s*\d{1,3}(\.\d{1,3})?)?\s*\))?|steps\(\s*\d{1,3}\s*\))$/;
+    var POS_OK = /^(>|<|[+-]=\d{1,2}(\.\d{1,2})?)$/;
     var MEDIA_QUERIES = {
         desktop: '(min-width: 1025px)',
         'not-mobile': '(min-width: 768px)',
@@ -94,9 +95,22 @@
     }
 
     function propsOf(preset) {
-        return Object.keys(preset.from || preset.to || preset.keyframes).filter(function (k) {
+        return Object.keys(preset.from || preset.to || preset.keyframes || {}).filter(function (k) {
             return k !== 'easeEach';
-        }).join(',');
+        });
+    }
+
+    function allPropsOf(preset, steps) {
+        var map = {};
+        propsOf(preset).forEach(function (k) { map[k] = true; });
+        if (Array.isArray(steps)) {
+            steps.forEach(function (st) {
+                if (st && st.preset) {
+                    propsOf(st.preset).forEach(function (k) { map[k] = true; });
+                }
+            });
+        }
+        return Object.keys(map).join(',');
     }
 
     function resolveScroll(raw) {
@@ -117,9 +131,43 @@
         };
     }
 
-    /**
-     * @return {{preset:Object,duration:number,delay:number,stagger:number,breakpoint:string,scroll:Object}|null}
-     */
+    function queryTargetEls(selector) {
+        if (!selector || typeof selector !== 'string') {
+            return [];
+        }
+        try {
+            return Array.prototype.slice.call(document.querySelectorAll(selector));
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function resolveSteps(rawSteps) {
+        if (!Array.isArray(rawSteps) || !rawSteps.length) {
+            return [];
+        }
+        var out = [];
+        for (var i = 0; i < rawSteps.length && out.length < 8; i++) {
+            var st = rawSteps[i];
+            if (!st || typeof st !== 'object' || typeof st.animation !== 'string' || !has(MOTIONS, st.animation)) {
+                continue;
+            }
+            var preset = compile(MOTIONS[st.animation], st.params);
+            if (typeof st.ease === 'string' && EASE_OK.test(st.ease)) {
+                preset.ease = st.ease;
+            }
+            var pos = typeof st.position === 'string' && POS_OK.test(st.position) ? st.position : '>';
+            var target = typeof st.target === 'string' && st.target.trim() ? st.target.trim() : '';
+            out.push({
+                preset: preset,
+                duration: num(st.duration, 0.6, 0, 30),
+                position: pos,
+                target: target
+            });
+        }
+        return out;
+    }
+
     function resolve(settings) {
         if (!settings || typeof settings !== 'object' || typeof settings.animation !== 'string' || !has(MOTIONS, settings.animation)) {
             return null;
@@ -135,13 +183,14 @@
             delay: num(settings.delay, 0, 0, 30),
             stagger: num(settings.stagger, 0, 0, 5),
             breakpoint: bp,
-            scroll: resolveScroll(settings.scroll)
+            scroll: resolveScroll(settings.scroll),
+            steps: resolveSteps(settings.steps)
         };
     }
 
     function entrance(els, preset, duration, delay, extra, replay) {
         if (replay) {
-            var props = propsOf(preset);
+            var props = propsOf(preset).join(',');
             gsap.killTweensOf(els, props);
             gsap.set(els, { clearProps: props });
         }
@@ -170,13 +219,76 @@
         return gsap.to(els, extend(vars, extra));
     }
 
-    function play(els, preset, duration, delay, extra, replay) {
-        return preset.kind === 'entrance'
-            ? entrance(els, preset, duration, delay, extra, replay)
-            : effect(els, preset, duration, delay, extra);
+    function addStepToTimeline(tl, els, preset, duration, position, extra, isFirst) {
+        if (preset.kind === 'entrance') {
+            var timing = extend({ duration: duration, ease: preset.ease || 'power2.out', immediateRender: isFirst }, extra);
+            if (preset.to) {
+                tl.fromTo(els, extend({}, preset.from), extend({}, preset.to, timing), position);
+            } else {
+                tl.from(els, extend({}, preset.from, timing), position);
+            }
+            return;
+        }
+
+        var vars = { duration: duration, ease: preset.ease || 'power1.inOut' };
+        if (preset.keyframes) {
+            vars.keyframes = preset.keyframes;
+            vars.ease = 'none';
+        } else {
+            extend(vars, preset.to);
+            if (preset.legs) {
+                vars.duration = duration / preset.legs;
+                vars.repeat = preset.legs - 1;
+                vars.yoyo = true;
+            }
+        }
+        tl.to(els, extend(vars, extra), position);
     }
 
-    function hover(el, preset, duration, delay) {
+    function play(els, preset, duration, delay, extra, replay, steps) {
+        var hasSteps = Array.isArray(steps) && steps.length > 0;
+        if (!hasSteps) {
+            return preset.kind === 'entrance'
+                ? entrance(els, preset, duration, delay, extra, replay)
+                : effect(els, preset, duration, delay, extra);
+        }
+
+        if (replay) {
+            var primaryProps = propsOf(preset).join(',');
+            if (primaryProps) {
+                gsap.killTweensOf(els, primaryProps);
+                gsap.set(els, { clearProps: primaryProps });
+            }
+            steps.forEach(function (st) {
+                var targetEls = st.target ? queryTargetEls(st.target) : els;
+                var stepProps = propsOf(st.preset).join(',');
+                if (targetEls && targetEls.length && stepProps) {
+                    gsap.killTweensOf(targetEls, stepProps);
+                    gsap.set(targetEls, { clearProps: stepProps });
+                }
+            });
+        }
+
+        var tlVars = { delay: delay };
+        if (extra) {
+            if (extra.paused) { tlVars.paused = true; }
+            if (extra.scrollTrigger) { tlVars.scrollTrigger = extra.scrollTrigger; }
+        }
+        var staggerExtra = extra && extra.stagger ? { stagger: extra.stagger } : null;
+        var tl = gsap.timeline(tlVars);
+
+        addStepToTimeline(tl, els, preset, duration, 0, staggerExtra, true);
+        for (var i = 0; i < steps.length; i++) {
+            var stepEls = steps[i].target ? queryTargetEls(steps[i].target) : els;
+            if (stepEls && stepEls.length) {
+                addStepToTimeline(tl, stepEls, steps[i].preset, steps[i].duration, steps[i].position, staggerExtra, false);
+            }
+        }
+        return tl;
+    }
+
+    function hover(el, preset, duration, delay, steps) {
+        var hasSteps = Array.isArray(steps) && steps.length > 0;
         var tween = null;
         var api = {
             enter: null,
@@ -187,6 +299,15 @@
                 }
             }
         };
+
+        if (hasSteps) {
+            api.enter = function () {
+                if (!tween || !tween.isActive()) {
+                    tween = play(el, preset, duration, delay, null, true, steps);
+                }
+            };
+            return api;
+        }
 
         if (preset.kind === 'entrance') {
             api.enter = function () {
@@ -208,11 +329,6 @@
         return api;
     }
 
-    /**
-     * Arm a ScrollTrigger animation (once, toggleActions, scrub parallax, or pin).
-     *
-     * @return {{tween:Object,trigger:Object|null}}
-     */
     function scroll(target, resolved, ST, replay, previewMarkers) {
         var sc = resolved.scroll || resolveScroll(null);
         var extra = resolved.stagger > 0 ? { stagger: resolved.stagger } : null;
@@ -231,7 +347,7 @@
         }
 
         if (!ST) {
-            return { tween: play(target, resolved.preset, resolved.duration, resolved.delay, extra, replay), trigger: null };
+            return { tween: play(target, resolved.preset, resolved.duration, resolved.delay, extra, replay, resolved.steps), trigger: null };
         }
 
         var stVars = {
@@ -247,11 +363,11 @@
                 resolved.preset.ease = 'none';
             }
             stVars.scrub = sc.scrub;
-            var scrubTween = play(target, resolved.preset, resolved.duration, 0, extend({ scrollTrigger: stVars }, extra), replay);
+            var scrubTween = play(target, resolved.preset, resolved.duration, 0, extend({ scrollTrigger: stVars }, extra), replay, resolved.steps);
             return { tween: scrubTween, trigger: scrubTween.scrollTrigger || null };
         }
 
-        var tween = play(target, resolved.preset, resolved.duration, resolved.delay, extend({ paused: true }, extra), replay);
+        var tween = play(target, resolved.preset, resolved.duration, resolved.delay, extend({ paused: true }, extra), replay, resolved.steps);
         var isOnce = sc.toggleActions === 'play none none none' && !sc.pin;
 
         if (isOnce) {
@@ -270,7 +386,7 @@
         var tween = null;
         var handler = function () {
             if (!tween || !tween.isActive()) {
-                tween = play(el, resolved.preset, resolved.duration, resolved.delay, null, true);
+                tween = play(el, resolved.preset, resolved.duration, resolved.delay, null, true, resolved.steps);
             }
         };
         el.addEventListener('click', handler);
@@ -281,7 +397,7 @@
     }
 
     function bindHover(el, resolved) {
-        var hv = hover(el, resolved.preset, resolved.duration, resolved.delay);
+        var hv = hover(el, resolved.preset, resolved.duration, resolved.delay, resolved.steps);
         el.addEventListener('mouseenter', hv.enter);
         el.addEventListener('mouseleave', hv.leave);
         return function () {
@@ -315,7 +431,7 @@
         }
 
         if (triggerName === 'load') {
-            var loadTween = play(els, resolved.preset, resolved.duration, resolved.delay, resolved.stagger > 0 ? { stagger: resolved.stagger } : null);
+            var loadTween = play(els, resolved.preset, resolved.duration, resolved.delay, resolved.stagger > 0 ? { stagger: resolved.stagger } : null, false, resolved.steps);
             return function () { loadTween.kill(); };
         }
 

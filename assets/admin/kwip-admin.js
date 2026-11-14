@@ -15,8 +15,11 @@
     const MSG_FROM_FRAME = 'kwipa-inspector';
     const MSG_TO_FRAME = 'kwipa-builder';
     const MAX_SELECTOR = 255;
+    const MAX_HISTORY = 40;
+    const MAX_STEPS = (data.limits && data.limits.maxSteps) || 8;
     const ATTR_TOKEN = /^\[[a-zA-Z][a-zA-Z0-9_-]*(?:[~|^$*]?="[a-zA-Z0-9 _.:-]{1,64}")?\]$/;
     const BASE_SELECTOR_OK = /^[\p{L}\p{N}_\-#.>+~:()*\\\/ ]+$/u;
+    const POS_OK = /^(>|<|[+-]=\d{1,2}(\.\d{1,2})?)$/;
 
     const TABS = ['load', 'scroll', 'hover', 'click'].filter((t) => data.triggers.indexOf(t) !== -1);
     const TAB_LABELS = { load: 'Load', scroll: 'Scroll', hover: 'Hover', click: 'Click' };
@@ -41,6 +44,15 @@
         click: { animation: 'spin', duration: 0.8, delay: 0, stagger: 0, ease: '', breakpoint: 'all' },
     };
 
+    const POSITION_PILLS = [
+        { value: '>', label: 'Next (after prev)' },
+        { value: '<', label: 'With prev' },
+        { value: '-=0.15', label: 'Overlap 0.15s' },
+        { value: '-=0.3', label: 'Overlap 0.30s' },
+        { value: '+=0.2', label: 'Pause 0.20s' },
+        { value: '+=0.5', label: 'Pause 0.50s' },
+    ];
+
     const EASE_CURVES = {
         '': 'M 2 38 C 12 38, 18 4, 52 4',
         'power2.out': 'M 2 38 C 14 38, 22 4, 52 4',
@@ -61,6 +73,7 @@
 
     const clamp = (n, min, max) => Math.round(Math.min(Math.max(n, min), max) * 1000) / 1000;
     const fmt = (n) => (Math.round(n * 100) / 100) + 's';
+    const clone = (obj) => JSON.parse(JSON.stringify(obj));
 
     const MOTIONS = data.motions || {};
     const EASES = data.eases || { '': 'Preset default' };
@@ -102,6 +115,23 @@
         return MOTIONS[slug] && MOTIONS[slug].label ? MOTIONS[slug].label : slug;
     }
 
+    function describeFlow(idx, pos, delay) {
+        if (idx === 0) {
+            return delay > 0 ? 'Starts after ' + fmt(delay) : 'Starts first';
+        }
+        const prevNum = '0' + idx;
+        if (pos === '<') {
+            return 'With ' + prevNum;
+        }
+        if (pos && pos.indexOf('-=') === 0) {
+            return 'Overlaps ' + prevNum + ' (' + pos.slice(2) + 's)';
+        }
+        if (pos && pos.indexOf('+=') === 0) {
+            return 'Waits +' + pos.slice(2) + 's after ' + prevNum;
+        }
+        return 'Next after ' + prevNum;
+    }
+
     const GROUPS = (function () {
         const order = [];
         const byTitle = {};
@@ -121,9 +151,9 @@
             return { version: 2, scopes: {} };
         }
         if (raw.scopes && typeof raw.scopes === 'object' && !Array.isArray(raw.scopes)) {
-            return { version: 2, scopes: JSON.parse(JSON.stringify(raw.scopes)) };
+            return { version: 2, scopes: clone(raw.scopes) };
         }
-        return { version: 2, scopes: Object.keys(raw).length ? { global: JSON.parse(JSON.stringify(raw)) } : {} };
+        return { version: 2, scopes: Object.keys(raw).length ? { global: clone(raw) } : {} };
     }
 
     function sanitizeParamsForMotion(slug, rawParams) {
@@ -168,6 +198,37 @@
         return Object.keys(out).length ? out : undefined;
     }
 
+    function prepareSteps(rawSteps) {
+        if (!Array.isArray(rawSteps) || !rawSteps.length) {
+            return undefined;
+        }
+        const out = [];
+        rawSteps.slice(0, MAX_STEPS).forEach((st) => {
+            if (!st || typeof st !== 'object' || typeof st.animation !== 'string' || !st.animation) {
+                return;
+            }
+            const item = {
+                animation: st.animation,
+                duration: Number.isFinite(st.duration) ? st.duration : 0.6,
+            };
+            if (typeof st.target === 'string' && st.target.trim() && isSelectorValid(st.target.trim())) {
+                item.target = st.target.trim();
+            }
+            if (typeof st.position === 'string' && st.position && st.position !== '>' && POS_OK.test(st.position)) {
+                item.position = st.position;
+            }
+            if (typeof st.ease === 'string' && st.ease) {
+                item.ease = st.ease;
+            }
+            const params = sanitizeParamsForMotion(st.animation, st.params);
+            if (params) {
+                item.params = params;
+            }
+            out.push(item);
+        });
+        return out.length ? out : undefined;
+    }
+
     function prepareScoped(scopedDoc) {
         const cleanScopes = {};
         const scopes = (scopedDoc && scopedDoc.scopes) || {};
@@ -179,10 +240,13 @@
             }
             const outRules = {};
             Object.keys(rules).forEach((selector) => {
+                if (!isSelectorValid(selector)) {
+                    return;
+                }
                 const entry = {};
                 TABS.forEach((trigger) => {
                     const s = rules[selector][trigger];
-                    if (!s) {
+                    if (!s || typeof s.animation !== 'string') {
                         return;
                     }
                     const item = {
@@ -211,6 +275,10 @@
                             item.scroll = sc;
                         }
                     }
+                    const steps = prepareSteps(s.steps);
+                    if (steps) {
+                        item.steps = steps;
+                    }
                     entry[trigger] = item;
                 });
                 if (Object.keys(entry).length) {
@@ -226,7 +294,7 @@
     }
 
     function defaultSettings(trigger) {
-        const d = JSON.parse(JSON.stringify(DEFAULTS[trigger]));
+        const d = clone(DEFAULTS[trigger]);
         if (data.animations.indexOf(d.animation) === -1) {
             d.animation = data.animations[0];
         }
@@ -247,6 +315,81 @@
         url.searchParams.set(data.frame.param, '1');
         url.searchParams.set(data.frame.nonceParam, nonce || data.frame.nonce);
         return url.toString();
+    }
+
+    function toUnifiedSteps(s) {
+        const first = {
+            animation: s.animation,
+            duration: Number.isFinite(s.duration) ? s.duration : 1,
+            ease: s.ease || '',
+            params: s.params ? clone(s.params) : undefined,
+            position: '0',
+            target: '',
+        };
+        const rest = Array.isArray(s.steps)
+            ? s.steps.map((st) => ({
+                animation: st.animation,
+                duration: Number.isFinite(st.duration) ? st.duration : 0.6,
+                ease: st.ease || '',
+                params: st.params ? clone(st.params) : undefined,
+                position: st.position || '>',
+                target: st.target || '',
+            }))
+            : [];
+        return [first].concat(rest);
+    }
+
+    function fromUnifiedSteps(list) {
+        const first = list[0];
+        const rest = list.slice(1).map((st) => ({
+            animation: st.animation,
+            duration: st.duration,
+            position: st.position || '>',
+            ease: st.ease || '',
+            params: st.params,
+            target: st.target || undefined,
+        }));
+        return {
+            animation: first.animation,
+            duration: first.duration,
+            ease: first.ease || '',
+            params: first.params,
+            steps: rest.length ? rest : undefined,
+        };
+    }
+
+    function computeTimelineLayout(steps, delay, stagger) {
+        const d0 = Number(delay) || 0;
+        let prevStart = d0;
+        let prevEnd = d0;
+        let maxEnd = d0;
+
+        const bars = steps.map((st, idx) => {
+            const dur = Math.max(0, Number(st.duration) || 0);
+            let start = d0;
+            if (idx > 0) {
+                const pos = st.position || '>';
+                if (pos === '<') {
+                    start = prevStart;
+                } else if (pos.indexOf('-=') === 0) {
+                    start = Math.max(0, prevEnd - (parseFloat(pos.slice(2)) || 0));
+                } else if (pos.indexOf('+=') === 0) {
+                    start = prevEnd + (parseFloat(pos.slice(2)) || 0);
+                } else {
+                    start = prevEnd;
+                }
+            }
+            const end = start + dur;
+            prevStart = start;
+            prevEnd = end;
+            if (end > maxEnd) {
+                maxEnd = end;
+            }
+            return { index: idx, step: st, start, end, duration: dur };
+        });
+
+        const total = Math.max(1.2, maxEnd + (Number(stagger) || 0));
+        return { bars, total, activeEnd: maxEnd, delay: d0 };
     }
 
     function StudioLogo() {
@@ -418,31 +561,156 @@
         );
     }
 
-    function TimingStrip(props) {
-        const total = Math.max(2, props.delay + props.duration + props.stagger);
-        const wait = (props.delay / total) * 100;
-        const run = Math.max(2, ((props.duration + props.stagger) / total) * 100);
+    function VisualTimeline(props) {
+        const layout = useMemo(
+            () => computeTimelineLayout(props.steps, props.delay, props.stagger),
+            [props.steps, props.delay, props.stagger]
+        );
+        const canAdd = props.steps.length < MAX_STEPS + 1;
+        const marks = [0, 0.25, 0.5, 0.75, 1].map((t) => fmt(layout.total * t));
 
-        return h('div', { className: 'kwipa-timing', 'aria-hidden': 'true' },
-            h('div', { className: 'kwipa-track' },
-                h('span', { className: 'kwipa-wait', style: { width: wait + '%' } }),
-                h('span', { className: 'kwipa-run', style: { width: run + '%' } })
+        return h('div', { className: 'kwipa-tl' },
+            h('div', { className: 'kwipa-tl-head' },
+                h('div', { className: 'kwipa-tl-title' },
+                    h('span', null, 'Sequence timeline'),
+                    h('span', { className: 'kwipa-tl-total' }, fmt(layout.activeEnd))
+                ),
+                h('button', {
+                    type: 'button',
+                    className: 'kwipa-btn kwipa-tl-add',
+                    disabled: !canAdd,
+                    onClick: props.onAddStep,
+                }, '+ Add step')
             ),
-            h('div', { className: 'kwipa-scale' },
-                h('span', null, '0.0s'),
-                props.delay > 0 && h('span', null, 'wait ' + fmt(props.delay)),
-                h('span', null, fmt(total))
+            h('div', { className: 'kwipa-tl-board' },
+                h('div', { className: 'kwipa-tl-ruler', 'aria-hidden': 'true' },
+                    marks.map((m, i) => h('span', { key: i }, m))
+                ),
+                h('div', { className: 'kwipa-tl-lanes' },
+                    h('div', { className: 'kwipa-tl-gridlines', 'aria-hidden': 'true' },
+                        marks.map((_, i) => h('i', { key: i }))
+                    ),
+                    props.playNonce > 0 && h('div', {
+                        key: props.playNonce,
+                        className: 'kwipa-tl-playhead',
+                        style: { '--kwipa-play-dur': Math.max(0.35, layout.total) + 's' },
+                    }),
+                    layout.bars.map((bar) => {
+                        const isSelected = props.activeIndex === bar.index;
+                        const hasCustomTarget = !!(bar.step.target && bar.step.target.trim());
+                        const targetTag = hasCustomTarget ? bar.step.target.trim() : props.rootSelector;
+                        const flowText = describeFlow(bar.index, bar.step.position, layout.delay);
+                        const timeWindow = fmt(bar.start) + ' \u2192 ' + fmt(bar.end);
+
+                        const leftPct = Math.min(86, (bar.start / layout.total) * 100);
+                        const widthPct = Math.max(14, Math.min(100 - leftPct, (bar.duration / layout.total) * 100));
+                        const delayPct = bar.index === 0 && layout.delay > 0 ? Math.min(leftPct, (layout.delay / layout.total) * 100) : 0;
+
+                        return h('button', {
+                            key: bar.index,
+                            type: 'button',
+                            'aria-pressed': isSelected,
+                            className: 'kwipa-tl-item' + (isSelected ? ' is-selected' : ''),
+                            onClick: () => props.onSelectStep(bar.index),
+                        },
+                            h('div', { className: 'kwipa-tl-meta' },
+                                h('span', { className: 'kwipa-tl-idx' }, '0' + (bar.index + 1)),
+                                h('span', {
+                                    className: 'kwipa-tl-el-tag' + (hasCustomTarget ? ' is-custom' : ''),
+                                    title: 'Element: ' + targetTag,
+                                }, targetTag),
+                                h('span', { className: 'kwipa-tl-flow-tag' }, flowText),
+                                h('span', { className: 'kwipa-tl-time-tag' }, timeWindow)
+                            ),
+                            h('div', { className: 'kwipa-tl-track' },
+                                delayPct > 0 && h('span', { className: 'kwipa-tl-delay-bar', style: { width: delayPct + '%' } }),
+                                h('span', {
+                                    className: 'kwipa-tl-bar is-c' + (bar.index % 4),
+                                    style: { left: leftPct + '%', width: widthPct + '%' },
+                                },
+                                    h('span', { className: 'kwipa-tl-bar-name' }, animLabel(bar.step.animation)),
+                                    h('span', { className: 'kwipa-tl-bar-dur' }, fmt(bar.duration))
+                                )
+                            )
+                        );
+                    })
+                )
             )
         );
     }
 
     function TriggerPanel(props) {
         const s = props.settings;
-        const motionSpec = s && MOTIONS[s.animation] ? MOTIONS[s.animation] : null;
+        const steps = useMemo(() => (s ? toUnifiedSteps(s) : []), [s]);
+        const safeIdx = Math.min(props.activeStep, Math.max(0, steps.length - 1));
+        const activeStepObj = steps[safeIdx] || null;
+
+        const motionSpec = activeStepObj && MOTIONS[activeStepObj.animation] ? MOTIONS[activeStepObj.animation] : null;
         const paramSpecs = motionSpec && motionSpec.params && typeof motionSpec.params === 'object' ? motionSpec.params : {};
         const paramKeys = Object.keys(paramSpecs);
+
         const sc = (s && s.scroll) || { start: 'top 85%', end: 'bottom 20%', scrub: false, pin: false, toggleActions: 'play none none none', trigger: '' };
         const isScrub = sc.scrub === true || (typeof sc.scrub === 'number' && sc.scrub > 0);
+
+        function commitSteps(nextList, nextSelectedIdx) {
+            props.onChange(fromUnifiedSteps(nextList));
+            if (typeof nextSelectedIdx === 'number') {
+                props.onSelectStep(nextSelectedIdx);
+            }
+        }
+
+        function patchActiveStep(patch) {
+            const nextList = steps.map((st, idx) => (idx === safeIdx ? Object.assign({}, st, patch) : st));
+            commitSteps(nextList);
+        }
+
+        function addStep() {
+            if (steps.length >= MAX_STEPS + 1) {
+                return;
+            }
+            const nextSlug = data.animations.indexOf('scale-up') !== -1 ? 'scale-up' : data.animations[0];
+            const nextList = steps.concat([{ animation: nextSlug, duration: 0.6, position: '>', ease: '', target: '' }]);
+            commitSteps(nextList, nextList.length - 1);
+        }
+
+        function duplicateActiveStep() {
+            if (steps.length >= MAX_STEPS + 1 || !activeStepObj) {
+                return;
+            }
+            const copy = clone(activeStepObj);
+            if (safeIdx === 0) {
+                copy.position = '>';
+            }
+            const nextList = steps.slice(0, safeIdx + 1).concat([copy], steps.slice(safeIdx + 1));
+            commitSteps(nextList, safeIdx + 1);
+        }
+
+        function moveActiveStep(delta) {
+            const target = safeIdx + delta;
+            if (target < 0 || target >= steps.length) {
+                return;
+            }
+            const nextList = steps.slice();
+            const moved = nextList[safeIdx];
+            nextList[safeIdx] = nextList[target];
+            nextList[target] = moved;
+            nextList[0].position = '0';
+            nextList[0].target = '';
+            if (nextList[1] && nextList[1].position === '0') {
+                nextList[1].position = '>';
+            }
+            commitSteps(nextList, target);
+        }
+
+        function removeActiveStep() {
+            if (steps.length <= 1) {
+                return;
+            }
+            const nextList = steps.filter((_, idx) => idx !== safeIdx);
+            nextList[0].position = '0';
+            nextList[0].target = '';
+            commitSteps(nextList, Math.max(0, safeIdx - 1));
+        }
 
         function patchScroll(patch) {
             props.onChange({ scroll: Object.assign({}, sc, patch) });
@@ -463,22 +731,74 @@
                     h('span', { className: 'kwipa-switch-ui', 'aria-hidden': 'true' })
                 )
             ),
-            s && h(Fragment, null,
-                h('fieldset', { className: 'kwipa-fieldset' },
-                    h('legend', null, 'Motion preset'),
-                    h(PresetGrid, { value: s.animation, onChange: (slug) => props.onChange({ animation: slug, params: undefined }) }),
-                    data.libraryUrl && h('a', { className: 'kwipa-more', href: data.libraryUrl }, '+ Install or manage motion packs')
-                ),
+            s && activeStepObj && h(Fragment, null,
+                h(VisualTimeline, {
+                    steps,
+                    rootSelector: props.rootSelector,
+                    delay: s.delay || 0,
+                    stagger: s.stagger || 0,
+                    activeIndex: safeIdx,
+                    playNonce: props.playNonce,
+                    onSelectStep: props.onSelectStep,
+                    onAddStep: addStep,
+                }),
 
-                paramKeys.length > 0 && h('fieldset', { className: 'kwipa-fieldset' },
-                    h('legend', null, 'Parameters'),
-                    h('div', { className: 'kwipa-slider-stack' },
+                h('div', { className: 'kwipa-step-inspector' },
+                    h('div', { className: 'kwipa-step-bar' },
+                        h('span', { className: 'kwipa-step-num' }, 'STEP 0' + (safeIdx + 1)),
+                        h('span', { className: 'kwipa-step-heading' }, animLabel(activeStepObj.animation)),
+                        h('div', { className: 'kwipa-step-tools' },
+                            h('button', { type: 'button', className: 'kwipa-step-tool', title: 'Move earlier', disabled: safeIdx === 0, onClick: () => moveActiveStep(-1) }, '\u2191'),
+                            h('button', { type: 'button', className: 'kwipa-step-tool', title: 'Move later', disabled: safeIdx === steps.length - 1, onClick: () => moveActiveStep(1) }, '\u2193'),
+                            h('button', { type: 'button', className: 'kwipa-step-tool', title: 'Duplicate step', disabled: steps.length >= MAX_STEPS + 1, onClick: duplicateActiveStep }, '\u29c9'),
+                            h('button', { type: 'button', className: 'kwipa-step-tool is-del', title: 'Remove step', disabled: steps.length <= 1, onClick: removeActiveStep }, '\u00d7')
+                        )
+                    ),
+
+                    safeIdx > 0 && h(Fragment, null,
+                        h('div', { className: 'kwipa-step-target-box' },
+                            h('span', { className: 'kwipa-field-label' }, 'Element to animate in Step 0' + (safeIdx + 1)),
+                            h('div', { className: 'kwipa-step-target-row' },
+                                h('input', {
+                                    type: 'text',
+                                    placeholder: 'Same as Step 01 (' + props.rootSelector + ')',
+                                    value: activeStepObj.target || '',
+                                    onChange: (e) => patchActiveStep({ target: e.target.value }),
+                                }),
+                                h('button', {
+                                    type: 'button',
+                                    className: 'kwipa-btn kwipa-btn-dark kwipa-pick-btn' + (props.pickingStep ? ' is-picking' : ''),
+                                    onClick: () => props.onTogglePickStep(!props.pickingStep),
+                                }, props.pickingStep ? 'Click canvas\u2026' : 'Pick on canvas')
+                            )
+                        ),
+
+                        h('div', { className: 'kwipa-field' },
+                            h('span', { className: 'kwipa-field-label' }, 'When Step 0' + (safeIdx + 1) + ' plays'),
+                            h('div', { className: 'kwipa-pos-pills', role: 'group', 'aria-label': 'Step timing offset' },
+                                POSITION_PILLS.map((pill) => h('button', {
+                                    key: pill.value,
+                                    type: 'button',
+                                    className: 'kwipa-pos-pill' + ((activeStepObj.position || '>') === pill.value ? ' is-active' : ''),
+                                    onClick: () => patchActiveStep({ position: pill.value }),
+                                }, pill.label))
+                            )
+                        )
+                    ),
+
+                    h(PresetGrid, {
+                        value: activeStepObj.animation,
+                        onChange: (slug) => patchActiveStep({ animation: slug, params: undefined }),
+                    }),
+                    data.libraryUrl && h('a', { className: 'kwipa-more', href: data.libraryUrl }, '+ Install or manage motion packs'),
+
+                    paramKeys.length > 0 && h('div', { className: 'kwipa-slider-stack' },
                         paramKeys.map((key) => {
                             const spec = paramSpecs[key];
-                            const currentVal = s.params && Number.isFinite(s.params[key]) ? s.params[key] : spec.default;
+                            const currentVal = activeStepObj.params && Number.isFinite(activeStepObj.params[key]) ? activeStepObj.params[key] : spec.default;
                             return h(SliderNumberField, {
-                                key: s.animation + '-' + key,
-                                id: 'kwipa-param-' + key,
+                                key: activeStepObj.animation + '-' + safeIdx + '-' + key,
+                                id: 'kwipa-param-' + safeIdx + '-' + key,
                                 label: spec.label || key,
                                 value: currentVal,
                                 min: spec.min,
@@ -486,12 +806,36 @@
                                 step: spec.step || 1,
                                 unit: spec.unit !== undefined ? spec.unit : '',
                                 onChange: (v) => {
-                                    const nextParams = Object.assign({}, s.params || {});
+                                    const nextParams = Object.assign({}, activeStepObj.params || {});
                                     nextParams[key] = v;
-                                    props.onChange({ params: nextParams });
+                                    patchActiveStep({ params: nextParams });
                                 },
                             });
                         })
+                    ),
+
+                    h(SliderNumberField, {
+                        id: 'kwipa-step-duration-' + safeIdx,
+                        label: 'Step duration',
+                        value: activeStepObj.duration,
+                        min: 0.05,
+                        max: Math.min(10, data.limits.maxDuration),
+                        step: 0.05,
+                        unit: 's',
+                        onChange: (v) => patchActiveStep({ duration: v }),
+                    }),
+
+                    h('div', { className: 'kwipa-ease-card', style: { marginTop: 0 } },
+                        h(EaseCurvePreview, { ease: activeStepObj.ease || '' }),
+                        h('label', { className: 'kwipa-field', htmlFor: 'kwipa-ease-' + safeIdx },
+                            h('span', { className: 'kwipa-field-label' }, 'Step easing'),
+                            h('select', {
+                                id: 'kwipa-ease-' + safeIdx,
+                                className: 'kwipa-select',
+                                value: activeStepObj.ease || '',
+                                onChange: (e) => patchActiveStep({ ease: e.target.value }),
+                            }, Object.keys(EASES).map((k) => h('option', { key: k || 'default', value: k }, EASES[k])))
+                        )
                     )
                 ),
 
@@ -575,23 +919,10 @@
                 ),
 
                 h('fieldset', { className: 'kwipa-fieldset' },
-                    h('legend', null, 'Timing, easing & devices'),
-                    h('div', { className: 'kwipa-row-3' },
-                        h(CompactNumberField, { id: 'kwipa-duration', label: 'Duration', value: s.duration, min: 0, max: data.limits.maxDuration, step: 0.1, onChange: (v) => props.onChange({ duration: v }) }),
-                        h(CompactNumberField, { id: 'kwipa-delay', label: 'Delay', value: s.delay || 0, min: 0, max: data.limits.maxDelay, step: 0.1, onChange: (v) => props.onChange({ delay: v }) }),
-                        h(CompactNumberField, { id: 'kwipa-stagger', label: 'Stagger', value: s.stagger || 0, min: 0, max: data.limits.maxStagger || 5, step: 0.05, onChange: (v) => props.onChange({ stagger: v }) })
-                    ),
-                    h('div', { className: 'kwipa-ease-card' },
-                        h(EaseCurvePreview, { ease: s.ease || '' }),
-                        h('label', { className: 'kwipa-field', htmlFor: 'kwipa-ease' },
-                            h('span', { className: 'kwipa-field-label' }, 'Easing curve'),
-                            h('select', {
-                                id: 'kwipa-ease',
-                                className: 'kwipa-select',
-                                value: s.ease || '',
-                                onChange: (e) => props.onChange({ ease: e.target.value }),
-                            }, Object.keys(EASES).map((k) => h('option', { key: k || 'default', value: k }, EASES[k])))
-                        )
+                    h('legend', null, 'Trigger timing & devices'),
+                    h('div', { className: 'kwipa-row' },
+                        h(CompactNumberField, { id: 'kwipa-delay', label: 'Start delay', value: s.delay || 0, min: 0, max: data.limits.maxDelay, step: 0.1, onChange: (v) => props.onChange({ delay: v }) }),
+                        h(CompactNumberField, { id: 'kwipa-stagger', label: 'Group stagger', value: s.stagger || 0, min: 0, max: data.limits.maxStagger || 5, step: 0.05, onChange: (v) => props.onChange({ stagger: v }) })
                     ),
                     h('label', { className: 'kwipa-field', htmlFor: 'kwipa-bp', style: { marginTop: '10px' } },
                         h('span', { className: 'kwipa-field-label' }, 'Responsive devices'),
@@ -601,8 +932,7 @@
                             value: s.breakpoint || 'all',
                             onChange: (e) => props.onChange({ breakpoint: e.target.value }),
                         }, Object.keys(BREAKPOINTS).map((k) => h('option', { key: k, value: k }, BREAKPOINTS[k])))
-                    ),
-                    !isScrub && h(TimingStrip, { duration: s.duration, delay: s.delay || 0, stagger: s.stagger || 0 })
+                    )
                 ),
 
                 h('div', { className: 'kwipa-actions' },
@@ -617,11 +947,136 @@
         );
     }
 
+    function JsonTransferModal(props) {
+        const [mode, setMode] = useState('export');
+        const [rawText, setRawText] = useState('');
+        const [importStrategy, setImportStrategy] = useState('merge');
+        const [localError, setLocalError] = useState('');
+        const exportJson = useMemo(() => JSON.stringify(prepareScoped(props.doc), null, 2), [props.doc]);
+
+        function downloadFile() {
+            const blob = new Blob([exportJson], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().slice(0, 10);
+            a.href = url;
+            a.download = 'kwip-animation-' + stamp + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function copyJson() {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(exportJson);
+            }
+            props.onNotify({ type: 'success', text: 'Configuration JSON copied to clipboard.' });
+        }
+
+        function handleFile(e) {
+            const file = e.target.files && e.target.files[0];
+            if (!file) {
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => setRawText(String(reader.result || ''));
+            reader.readAsText(file);
+        }
+
+        function runImport() {
+            setLocalError('');
+            let parsed;
+            try {
+                parsed = JSON.parse(rawText);
+            } catch (e) {
+                setLocalError('Invalid JSON syntax.');
+                return;
+            }
+            const normalized = prepareScoped(normalizeScoped(parsed));
+            if (!Object.keys(normalized.scopes).length) {
+                setLocalError('No valid scopes or selectors found in this JSON.');
+                return;
+            }
+            props.onImport(normalized, importStrategy);
+            props.onClose();
+        }
+
+        return h('div', {
+            className: 'kwipa-modal-backdrop',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': 'Export or import configuration',
+            onClick: (e) => { if (e.target === e.currentTarget) { props.onClose(); } },
+        },
+            h('div', { className: 'kwipa-modal' },
+                h('div', { className: 'kwipa-modal-head' },
+                    h('h2', null, 'Transfer animation configuration'),
+                    h('button', { type: 'button', className: 'kwipa-notice-x', 'aria-label': 'Close', onClick: props.onClose }, '\u00d7')
+                ),
+                h('div', { className: 'kwipa-modal-tabs' },
+                    h('button', {
+                        type: 'button',
+                        className: 'kwipa-dev-btn' + (mode === 'export' ? ' is-active' : ''),
+                        onClick: () => setMode('export'),
+                    }, 'Export JSON'),
+                    h('button', {
+                        type: 'button',
+                        className: 'kwipa-dev-btn' + (mode === 'import' ? ' is-active' : ''),
+                        onClick: () => setMode('import'),
+                    }, 'Import JSON')
+                ),
+                mode === 'export'
+                    ? h(Fragment, null,
+                        h('textarea', { className: 'kwipa-modal-textarea', readOnly: true, value: exportJson }),
+                        h('div', { className: 'kwipa-modal-foot' },
+                            h('span', { className: 'kwipa-hint' }, 'Portable v2 scoped schema.'),
+                            h('div', { className: 'kwipa-modal-btns' },
+                                h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-ghost', onClick: copyJson }, 'Copy JSON'),
+                                h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-primary', onClick: downloadFile }, 'Download .json')
+                            )
+                        )
+                    )
+                    : h(Fragment, null,
+                        localError && h('p', { className: 'kwipa-notice is-error', style: { margin: '0 0 10px' } }, localError),
+                        h('div', { className: 'kwipa-row', style: { marginBottom: '10px', alignItems: 'center' } },
+                            h('input', { type: 'file', accept: '.json,application/json', onChange: handleFile, style: { color: 'var(--kwipa-muted)', fontSize: '12px' } }),
+                            h('select', {
+                                className: 'kwipa-select',
+                                value: importStrategy,
+                                onChange: (e) => setImportStrategy(e.target.value),
+                            },
+                                h('option', { value: 'merge' }, 'Merge with existing rules'),
+                                h('option', { value: 'replace' }, 'Replace entire configuration')
+                            )
+                        ),
+                        h('textarea', {
+                            className: 'kwipa-modal-textarea',
+                            placeholder: 'Paste exported KWIP Animation JSON here\u2026',
+                            value: rawText,
+                            onChange: (e) => setRawText(e.target.value),
+                        }),
+                        h('div', { className: 'kwipa-modal-foot' },
+                            h('span', { className: 'kwipa-hint' }, 'Supports Undo (Ctrl+Z) after importing.'),
+                            h('div', { className: 'kwipa-modal-btns' },
+                                h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-ghost', onClick: props.onClose }, 'Cancel'),
+                                h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-primary', disabled: !rawText.trim(), onClick: runImport }, 'Import rules')
+                            )
+                        )
+                    )
+            )
+        );
+    }
+
     function App() {
         const initial = useMemo(() => normalizeScoped(data.config), []);
 
         const [doc, setDoc] = useState(initial);
         const [saved, setSaved] = useState(initial);
+        const [past, setPast] = useState([]);
+        const [future, setFuture] = useState([]);
+        const [transferOpen, setTransferOpen] = useState(false);
+
         const [scopeMode, setScopeMode] = useState('page');
         const [activePath, setActivePath] = useState('/');
         const [viewport, setViewport] = useState('desktop');
@@ -631,6 +1086,10 @@
         const [ancestors, setAncestors] = useState([]);
         const [matchCount, setMatchCount] = useState(null);
         const [tab, setTab] = useState(TABS[0]);
+        const [activeStep, setActiveStep] = useState(0);
+        const [pickingStep, setPickingStep] = useState(false);
+        const [playNonce, setPlayNonce] = useState(0);
+
         const [pageInput, setPageInput] = useState('/');
         const [frameNonce, setFrameNonce] = useState(data.frame.nonce);
         const [frameSrc, setFrameSrc] = useState(() => (originOk ? buildFrameUrl('/', data.frame.nonce) : null));
@@ -643,9 +1102,12 @@
 
         const iframeRef = useRef(null);
         const selectedRef = useRef('');
+        const pickStepRef = useRef(null);
         const previewTimer = useRef(0);
         const watchdog = useRef(0);
         const saveRef = useRef(null);
+        const undoRef = useRef(null);
+        const redoRef = useRef(null);
         selectedRef.current = selected;
 
         const currentScopeKey = scopeMode === 'global' ? 'global' : 'path:' + activePath;
@@ -656,18 +1118,49 @@
 
         const dirty = useMemo(() => JSON.stringify(prepareScoped(doc)) !== JSON.stringify(prepareScoped(saved)), [doc, saved]);
 
-        function updateCurrentScope(updater) {
+        function commitDoc(nextDoc) {
             setDoc((prev) => {
-                const nextScopes = Object.assign({}, prev.scopes);
-                const prevScopeRules = Object.assign({}, nextScopes[currentScopeKey] || {});
-                const updatedRules = updater(prevScopeRules);
-                if (Object.keys(updatedRules).length) {
-                    nextScopes[currentScopeKey] = updatedRules;
-                } else {
-                    delete nextScopes[currentScopeKey];
-                }
-                return { version: 2, scopes: nextScopes };
+                setPast((p) => p.slice(-(MAX_HISTORY - 1)).concat([clone(prev)]));
+                setFuture([]);
+                return nextDoc;
             });
+        }
+
+        function undo() {
+            if (!past.length) {
+                return;
+            }
+            const previous = past[past.length - 1];
+            setPast((p) => p.slice(0, -1));
+            setFuture((f) => [clone(doc)].concat(f.slice(0, MAX_HISTORY - 1)));
+            setDoc(previous);
+            send('clear');
+        }
+
+        function redo() {
+            if (!future.length) {
+                return;
+            }
+            const next = future[0];
+            setFuture((f) => f.slice(1));
+            setPast((p) => p.slice(-(MAX_HISTORY - 1)).concat([clone(doc)]));
+            setDoc(next);
+            send('clear');
+        }
+
+        undoRef.current = undo;
+        redoRef.current = redo;
+
+        function updateCurrentScope(updater) {
+            const nextScopes = Object.assign({}, doc.scopes);
+            const prevScopeRules = Object.assign({}, nextScopes[currentScopeKey] || {});
+            const updatedRules = updater(prevScopeRules);
+            if (Object.keys(updatedRules).length) {
+                nextScopes[currentScopeKey] = updatedRules;
+            } else {
+                delete nextScopes[currentScopeKey];
+            }
+            commitDoc({ version: 2, scopes: nextScopes });
         }
 
         function send(type, extra) {
@@ -676,6 +1169,79 @@
                 win.postMessage(Object.assign({ source: MSG_TO_FRAME, type }, extra), frameOrigin);
             }
         }
+
+        const current = selected && config[selected] ? config[selected][tab] || null : null;
+
+        function applyTrigger(selector, trigger, value) {
+            updateCurrentScope((rules) => {
+                const next = Object.assign({}, rules);
+                const triggers = Object.assign({}, next[selector]);
+                if (value) {
+                    triggers[trigger] = value;
+                } else {
+                    delete triggers[trigger];
+                }
+                if (Object.keys(triggers).length) {
+                    next[selector] = triggers;
+                } else {
+                    delete next[selector];
+                }
+                return next;
+            });
+        }
+
+        function previewNow(selector, trigger, s, markersOverride) {
+            const markersFlag = markersOverride !== undefined ? markersOverride : showMarkers;
+            const scrollPayload = s.scroll ? Object.assign({}, s.scroll, { markers: markersFlag }) : { markers: markersFlag };
+            setPlayNonce((n) => n + 1);
+            send('preview', {
+                selector,
+                trigger,
+                settings: {
+                    animation: s.animation,
+                    duration: s.duration,
+                    delay: s.delay || 0,
+                    stagger: s.stagger || 0,
+                    ease: s.ease || '',
+                    breakpoint: s.breakpoint || 'all',
+                    params: s.params || undefined,
+                    steps: Array.isArray(s.steps) && s.steps.length ? s.steps : undefined,
+                    scroll: trigger === 'scroll' ? scrollPayload : undefined,
+                },
+            });
+        }
+
+        function schedulePreview(selector, trigger, s) {
+            if (!autoPreview) {
+                return;
+            }
+            clearTimeout(previewTimer.current);
+            previewTimer.current = setTimeout(() => previewNow(selector, trigger, s), 350);
+        }
+
+        function changeTrigger(patch) {
+            const s = Object.assign({}, current, patch);
+            applyTrigger(selected, tab, s);
+            schedulePreview(selected, tab, s);
+        }
+
+        pickStepRef.current = function (pickedSelector) {
+            if (!pickingStep || !current || activeStep <= 0) {
+                return false;
+            }
+            const unified = toUnifiedSteps(current);
+            if (!unified[activeStep]) {
+                setPickingStep(false);
+                return false;
+            }
+            unified[activeStep].target = pickedSelector;
+            changeTrigger(fromUnifiedSteps(unified));
+            setPickingStep(false);
+            if (selectedRef.current) {
+                send('highlight', { selector: selectedRef.current });
+            }
+            return true;
+        };
 
         useEffect(() => {
             function onMessage(e) {
@@ -696,11 +1262,16 @@
                     }
                 } else if (msg.type === 'select') {
                     if (isSelectorValid(msg.selector)) {
+                        if (pickStepRef.current && pickStepRef.current(msg.selector)) {
+                            return;
+                        }
                         setSelected(msg.selector);
                         setSelectorDraft(msg.selector);
                         setSelectedLabel(typeof msg.label === 'string' ? msg.label.slice(0, 120) : '');
                         setAncestors(Array.isArray(msg.ancestors) ? msg.ancestors : []);
                         setMatchCount(typeof msg.matches === 'number' ? msg.matches : 1);
+                        setActiveStep(0);
+                        setPickingStep(false);
                     }
                 } else if (msg.type === 'matched') {
                     if (msg.selector === selectedRef.current) {
@@ -792,75 +1363,27 @@
             send('highlight', { selector: clean });
         }
 
-        function applyTrigger(selector, trigger, value) {
-            updateCurrentScope((rules) => {
-                const next = Object.assign({}, rules);
-                const triggers = Object.assign({}, next[selector]);
-                if (value) {
-                    triggers[trigger] = value;
-                } else {
-                    delete triggers[trigger];
-                }
-                if (Object.keys(triggers).length) {
-                    next[selector] = triggers;
-                } else {
-                    delete next[selector];
-                }
-                return next;
-            });
-        }
-
-        function previewNow(selector, trigger, s, markersOverride) {
-            const markersFlag = markersOverride !== undefined ? markersOverride : showMarkers;
-            const scrollPayload = s.scroll ? Object.assign({}, s.scroll, { markers: markersFlag }) : { markers: markersFlag };
-            send('preview', {
-                selector,
-                trigger,
-                settings: {
-                    animation: s.animation,
-                    duration: s.duration,
-                    delay: s.delay || 0,
-                    stagger: s.stagger || 0,
-                    ease: s.ease || '',
-                    breakpoint: s.breakpoint || 'all',
-                    params: s.params || undefined,
-                    scroll: trigger === 'scroll' ? scrollPayload : undefined,
-                },
-            });
-        }
-
-        function schedulePreview(selector, trigger, s) {
-            if (!autoPreview) {
-                return;
-            }
-            clearTimeout(previewTimer.current);
-            previewTimer.current = setTimeout(() => previewNow(selector, trigger, s), 350);
-        }
-
-        const current = selected && config[selected] ? config[selected][tab] || null : null;
-
         function enableTrigger() {
             const s = defaultSettings(tab);
+            setActiveStep(0);
+            setPickingStep(false);
             applyTrigger(selected, tab, s);
             schedulePreview(selected, tab, s);
         }
 
         function disableTrigger() {
+            setPickingStep(false);
             applyTrigger(selected, tab, null);
             clearTimeout(previewTimer.current);
             send('clear', { selector: selected });
-        }
-
-        function changeTrigger(patch) {
-            const s = Object.assign({}, current, patch);
-            applyTrigger(selected, tab, s);
-            schedulePreview(selected, tab, s);
         }
 
         function pick(selector, keepAncestors) {
             setSelected(selector);
             setSelectorDraft(selector);
             setSelectedLabel('');
+            setActiveStep(0);
+            setPickingStep(false);
             if (!keepAncestors) {
                 setAncestors([]);
             }
@@ -877,9 +1400,23 @@
         }
 
         function discard() {
-            setDoc(saved);
+            commitDoc(clone(saved));
             send('clear');
-            setNotice({ type: 'info', text: 'Changes discarded.' });
+            setNotice({ type: 'info', text: 'Reverted to last published state.' });
+        }
+
+        function handleImport(importedScoped, strategy) {
+            if (strategy === 'replace') {
+                commitDoc(importedScoped);
+            } else {
+                const mergedScopes = clone(doc.scopes || {});
+                Object.keys(importedScoped.scopes).forEach((scopeKey) => {
+                    mergedScopes[scopeKey] = Object.assign({}, mergedScopes[scopeKey] || {}, importedScoped.scopes[scopeKey]);
+                });
+                commitDoc({ version: 2, scopes: mergedScopes });
+            }
+            send('clear');
+            setNotice({ type: 'success', text: 'Imported rules into draft. Click Save changes to publish.' });
         }
 
         async function save() {
@@ -928,14 +1465,35 @@
 
         useEffect(() => {
             function onKey(e) {
-                if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's') {
+                if (e.key === 'Escape' && pickingStep) {
+                    setPickingStep(false);
+                    return;
+                }
+                const mod = e.ctrlKey || e.metaKey;
+                if (!mod) {
+                    return;
+                }
+                const key = String(e.key).toLowerCase();
+                if (key === 's') {
                     e.preventDefault();
                     saveRef.current();
+                    return;
+                }
+                const tag = document.activeElement && document.activeElement.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+                    return;
+                }
+                if (key === 'z' && !e.shiftKey) {
+                    e.preventDefault();
+                    undoRef.current();
+                } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+                    e.preventDefault();
+                    redoRef.current();
                 }
             }
             window.addEventListener('keydown', onKey);
             return () => window.removeEventListener('keydown', onKey);
-        }, []);
+        }, [pickingStep]);
 
         useEffect(() => {
             if (!dirty) {
@@ -972,6 +1530,12 @@
         const sitePages = Array.isArray(data.pages) ? data.pages : [];
 
         return h('div', { className: 'kwipa-app' },
+            transferOpen && h(JsonTransferModal, {
+                doc,
+                onClose: () => setTransferOpen(false),
+                onImport: handleImport,
+                onNotify: setNotice,
+            }),
             h('aside', { className: 'kwipa-sidebar' },
                 h('header', { className: 'kwipa-head' },
                     h('div', { className: 'kwipa-brand' },
@@ -983,6 +1547,9 @@
                         h('span', { className: 'kwipa-state' + (dirty ? ' is-dirty' : '') }, h('i', { 'aria-hidden': 'true' }), dirty ? 'Unsaved' : 'Synced')
                     ),
                     h('div', { className: 'kwipa-head-actions' },
+                        h('button', { type: 'button', className: 'kwipa-icon-btn', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', disabled: !past.length, onClick: undo }, '\u21a9'),
+                        h('button', { type: 'button', className: 'kwipa-icon-btn', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', disabled: !future.length, onClick: redo }, '\u21aa'),
+                        h('button', { type: 'button', className: 'kwipa-icon-btn', title: 'Export / Import JSON', 'aria-label': 'Export or import JSON', onClick: () => setTransferOpen(true) }, '\u21c5'),
                         h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-ghost', disabled: !dirty || saving, onClick: discard }, 'Discard'),
                         h('button', { type: 'button', className: 'kwipa-btn kwipa-btn-primary', disabled: !dirty || saving, onClick: save }, saving ? 'Publishing\u2026' : 'Save changes')
                     )
@@ -1051,16 +1618,22 @@
                                 role: 'tab',
                                 'aria-selected': tab === t,
                                 className: 'kwipa-tab' + (tab === t ? ' is-active' : ''),
-                                onClick: () => setTab(t),
+                                onClick: () => { setTab(t); setActiveStep(0); setPickingStep(false); },
                             }, TAB_LABELS[t], selected && config[selected] && config[selected][t] ? h('i', { className: 'kwipa-dot', 'aria-label': 'enabled' }) : null))
                         ),
                         h(TriggerPanel, {
                             trigger: tab,
+                            rootSelector: selected,
                             settings: current,
+                            activeStep,
+                            pickingStep,
+                            playNonce,
                             disabled: !selected,
                             previewDisabled: bridge.state !== 'ready',
                             autoPreview,
                             showMarkers,
+                            onSelectStep: (idx) => { setActiveStep(idx); setPickingStep(false); },
+                            onTogglePickStep: setPickingStep,
                             onToggleMarkers: (val) => {
                                 setShowMarkers(val);
                                 if (current && tab === 'scroll') {

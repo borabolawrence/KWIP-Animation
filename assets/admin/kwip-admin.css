@@ -135,6 +135,8 @@
 .kwipa-scroll {
     flex: 1;
     min-height: 0;
+    padding-bottom: 24px;
+    overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
@@ -624,6 +626,11 @@
     color: var(--kwipa-muted);
 }
 
+.kwipa-fieldset>* {
+    clear: both;
+    min-width: 0;
+}
+
 .kwipa-fieldset::after {
     content: "";
     display: table;
@@ -906,13 +913,13 @@
 
 .kwipa-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
 }
 
 .kwipa-row-3 {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
 }
 
@@ -920,6 +927,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+    min-width: 0;
 }
 
 .kwipa-field-head {
@@ -942,7 +950,7 @@
 
 .kwipa-slider-row {
     display: grid;
-    grid-template-columns: 1fr 78px;
+    grid-template-columns: minmax(0, 1fr) 74px;
     align-items: center;
     gap: 10px;
 }
@@ -1013,10 +1021,13 @@
 
 .kwipa-select {
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
     min-height: 32px;
     padding: 0 8px;
     font-size: 12px;
     color: var(--kwipa-ink);
+    text-overflow: ellipsis;
     background: var(--kwipa-bg);
     border: 1px solid var(--kwipa-border-strong);
     border-radius: 7px;
@@ -1680,4 +1691,556 @@
 
 .kwipa-lib .kwipa-glyph {
     background: #11141b;
+}
+
+/* ==========================================================================
+   5. Visual Timeline Sequencer (Labeled Tracks), Undo/Redo & JSON Modal
+   ========================================================================== */
+
+.kwipa-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    color: var(--kwipa-muted);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.14s ease;
+}
+
+.kwipa-icon-btn:hover:not(:disabled) {
+    color: var(--kwipa-ink);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--kwipa-border-strong);
+}
+
+.kwipa-icon-btn:disabled {
+    opacity: 0.32;
+    cursor: not-allowed;
+}
+
+/* Visual Swimlane Timeline */
+.kwipa-tl {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background: var(--kwipa-surface);
+    border: 1px solid var(--kwipa-border);
+    border-radius: var(--kwipa-radius);
+}
+
+.kwipa-tl-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.kwipa-tl-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--kwipa-muted);
+}
+
+.kwipa-tl-total {
+    padding: 1px 6px;
+    font-family: var(--kwipa-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--kwipa-ink);
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 99px;
+}
+
+.kwipa-tl-add {
+    min-height: 26px;
+    padding: 0 9px;
+    font-size: 11px;
+    color: var(--kwipa-lime-bright);
+    background: var(--kwipa-lime-tint);
+    border-color: var(--kwipa-lime-border);
+}
+
+.kwipa-tl-add:hover:not(:disabled) {
+    background: rgba(136, 206, 2, 0.22);
+    border-color: var(--kwipa-lime-bright);
+}
+
+.kwipa-tl-board {
+    position: relative;
+    padding: 6px 8px 8px;
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.kwipa-tl-ruler {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    font-family: var(--kwipa-mono);
+    font-size: 9.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--kwipa-dim);
+    border-bottom: 1px solid var(--kwipa-border);
+}
+
+.kwipa-tl-lanes {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kwipa-tl-gridlines {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+}
+
+.kwipa-tl-gridlines i {
+    width: 1px;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.kwipa-tl-item {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    padding: 6px 7px;
+    text-align: left;
+    color: var(--kwipa-ink);
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 7px;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.kwipa-tl-item:hover {
+    background: rgba(255, 255, 255, 0.045);
+    border-color: var(--kwipa-border-strong);
+}
+
+.kwipa-tl-item.is-selected {
+    background: rgba(136, 206, 2, 0.06);
+    border-color: var(--kwipa-lime-bright);
+    box-shadow: 0 0 0 1px var(--kwipa-lime-border);
+}
+
+.kwipa-tl-meta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-size: 10.5px;
+}
+
+.kwipa-tl-idx {
+    flex: none;
+    padding: 0 4px;
+    font-family: var(--kwipa-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--kwipa-ink);
+    background: var(--kwipa-surface-2);
+    border-radius: 4px;
+}
+
+.kwipa-tl-el-tag {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 1px 6px;
+    font-family: var(--kwipa-mono);
+    font-size: 10px;
+    color: var(--kwipa-ink);
+    background: var(--kwipa-surface);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kwipa-tl-el-tag.is-custom {
+    color: #38bdf8;
+    background: rgba(14, 165, 233, 0.12);
+    border-color: rgba(56, 189, 248, 0.32);
+}
+
+.kwipa-tl-flow-tag {
+    flex: none;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--kwipa-muted);
+    white-space: nowrap;
+}
+
+.kwipa-tl-time-tag {
+    flex: none;
+    font-family: var(--kwipa-mono);
+    font-size: 9.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--kwipa-dim);
+    white-space: nowrap;
+}
+
+.kwipa-tl-track {
+    position: relative;
+    height: 20px;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+
+.kwipa-tl-delay-bar {
+    position: absolute;
+    top: 5px;
+    left: 0;
+    height: 10px;
+    background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0 3px, transparent 3px 6px);
+    border-radius: 3px 0 0 3px;
+    pointer-events: none;
+}
+
+.kwipa-tl-bar {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 5px;
+    min-width: 38px;
+    padding: 0 7px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #090d05;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.kwipa-tl-bar.is-c0 {
+    background: linear-gradient(90deg, var(--kwipa-lime), var(--kwipa-lime-bright));
+}
+
+.kwipa-tl-bar.is-c1 {
+    background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+}
+
+.kwipa-tl-bar.is-c2 {
+    background: linear-gradient(90deg, #8b5cf6, #a78bfa);
+    color: #fff;
+}
+
+.kwipa-tl-bar.is-c3 {
+    background: linear-gradient(90deg, #d97706, #fbbf24);
+}
+
+.kwipa-tl-bar-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kwipa-tl-bar-dur {
+    flex: none;
+    font-family: var(--kwipa-mono);
+    font-size: 9.5px;
+    opacity: 0.84;
+}
+
+/* Animated Preview Playhead */
+.kwipa-tl-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 1.5px;
+    background: #fff;
+    box-shadow: 0 0 8px var(--kwipa-lime-bright);
+    pointer-events: none;
+    z-index: 4;
+    animation: kwipa-playhead var(--kwipa-play-dur, 1s) linear forwards;
+}
+
+.kwipa-tl-playhead::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -3.25px;
+    width: 8px;
+    height: 6px;
+    background: var(--kwipa-lime-bright);
+    clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+@keyframes kwipa-playhead {
+    from {
+        left: 0%;
+        opacity: 1;
+    }
+
+    92% {
+        opacity: 1;
+    }
+
+    to {
+        left: 100%;
+        opacity: 0;
+    }
+}
+
+/* Unified Selected Step Inspector */
+.kwipa-step-inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    background: var(--kwipa-surface);
+    border: 1px solid var(--kwipa-border-strong);
+    border-radius: var(--kwipa-radius);
+}
+
+.kwipa-step-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--kwipa-border);
+}
+
+.kwipa-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 7px;
+    font-family: var(--kwipa-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--kwipa-lime-bright);
+    background: var(--kwipa-lime-tint);
+    border: 1px solid var(--kwipa-lime-border);
+    border-radius: 5px;
+}
+
+.kwipa-step-heading {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--kwipa-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kwipa-step-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.kwipa-step-tool {
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 11px;
+    color: var(--kwipa-muted);
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.kwipa-step-tool:hover:not(:disabled) {
+    color: var(--kwipa-ink);
+    border-color: var(--kwipa-border-strong);
+}
+
+.kwipa-step-tool.is-del:hover:not(:disabled) {
+    color: var(--kwipa-danger);
+    border-color: rgba(244, 63, 94, 0.45);
+}
+
+.kwipa-step-tool:disabled {
+    opacity: 0.28;
+    cursor: not-allowed;
+}
+
+/* Per-Step Target Element Picker */
+.kwipa-step-target-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 9px;
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 8px;
+}
+
+.kwipa-step-target-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.kwipa-step-target-row input {
+    min-width: 0;
+    height: 28px;
+    padding: 0 8px;
+    font-family: var(--kwipa-mono);
+    font-size: 11px;
+    color: var(--kwipa-ink);
+    background: var(--kwipa-surface);
+    border: 1px solid var(--kwipa-border-strong);
+    border-radius: 6px;
+}
+
+.kwipa-pick-btn {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.kwipa-pick-btn.is-picking {
+    color: #090d05;
+    background: var(--kwipa-lime-bright);
+    border-color: var(--kwipa-lime-bright);
+}
+
+/* Position Offset Pills */
+.kwipa-pos-pills {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+}
+
+.kwipa-pos-pill {
+    padding: 5px 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+    color: var(--kwipa-muted);
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kwipa-pos-pill:hover {
+    color: var(--kwipa-ink);
+    border-color: var(--kwipa-border-strong);
+}
+
+.kwipa-pos-pill.is-active {
+    color: var(--kwipa-lime-bright);
+    background: var(--kwipa-lime-tint);
+    border-color: var(--kwipa-lime-border);
+}
+
+/* JSON Export / Import Modal */
+.kwipa-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(5, 7, 11, 0.78);
+    backdrop-filter: blur(6px);
+}
+
+.kwipa-modal {
+    width: 100%;
+    max-width: 560px;
+    padding: 20px 22px;
+    color: var(--kwipa-ink);
+    background: var(--kwipa-rail);
+    border: 1px solid var(--kwipa-border-strong);
+    border-radius: 14px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+}
+
+.kwipa-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.kwipa-modal-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--kwipa-ink);
+}
+
+.kwipa-modal-tabs {
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    margin-bottom: 14px;
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border);
+    border-radius: 8px;
+}
+
+.kwipa-modal-textarea {
+    width: 100%;
+    min-height: 210px;
+    padding: 10px 12px;
+    font-family: var(--kwipa-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--kwipa-ink);
+    background: var(--kwipa-bg);
+    border: 1px solid var(--kwipa-border-strong);
+    border-radius: 8px;
+    resize: vertical;
+}
+
+.kwipa-modal-textarea:focus {
+    border-color: var(--kwipa-lime);
+    outline: 0;
+}
+
+.kwipa-modal-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.kwipa-modal-btns {
+    display: flex;
+    gap: 8px;
 }

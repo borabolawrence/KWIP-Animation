@@ -23,11 +23,21 @@ final class KWIPA_Config {
 	const MAX_SCOPES       = 100;
 	const MAX_SELECTORS    = 500;
 	const MAX_SELECTOR_LEN = 255;
+	const MAX_STEPS        = 8;
 	const MAX_DURATION     = 30.0;
 	const MAX_DELAY        = 30.0;
 	const MAX_STAGGER      = 5.0;
 	const DEFAULT_DURATION = 1.0;
 	const TRIGGERS         = array( 'load', 'hover', 'scroll', 'click' );
+
+	const STEP_POSITIONS = array(
+		'>'      => 'After previous',
+		'<'      => 'With previous (simultaneous)',
+		'-=0.15' => 'Overlap 0.15s',
+		'-=0.3'  => 'Overlap 0.30s',
+		'+=0.2'  => 'Pause 0.20s',
+		'+=0.5'  => 'Pause 0.50s',
+	);
 
 	const EASES = array(
 		''                   => 'Preset default',
@@ -387,6 +397,16 @@ final class KWIPA_Config {
 					}
 				}
 
+				if ( isset( $settings['steps'] ) && is_array( $settings['steps'] ) && ! empty( $settings['steps'] ) ) {
+					$steps = self::sanitize_steps( $settings['steps'], $allowed_animations );
+					if ( is_wp_error( $steps ) ) {
+						return $steps;
+					}
+					if ( ! empty( $steps ) ) {
+						$entry['steps'] = $steps;
+					}
+				}
+
 				$clean_triggers[ $trigger ] = $entry;
 			}
 
@@ -457,6 +477,79 @@ final class KWIPA_Config {
 		}
 
 		return $out;
+	}
+
+
+	/**
+	 * Validate chained timeline steps (steps 2..N after the primary trigger motion).
+	 *
+	 * @param array    $raw_steps          Raw step objects.
+	 * @param string[] $allowed_animations Allowed motion slugs.
+	 * @return array[]|WP_Error
+	 */
+	private static function sanitize_steps( array $raw_steps, array $allowed_animations ) {
+		if ( count( $raw_steps ) > self::MAX_STEPS ) {
+			return self::error( 'kwipa_too_many_steps', __( 'Too many timeline steps on one trigger.', 'kwip-animation' ) );
+		}
+
+		$clean = array();
+
+		foreach ( $raw_steps as $step ) {
+			if ( ! is_array( $step ) ) {
+				return self::error( 'kwipa_invalid_step', __( 'Each timeline step must be an object.', 'kwip-animation' ) );
+			}
+
+			$animation = ( isset( $step['animation'] ) && is_string( $step['animation'] ) ) ? $step['animation'] : '';
+			$motion    = in_array( $animation, $allowed_animations, true ) ? KWIPA_Motions::get( $animation ) : null;
+			if ( null === $motion ) {
+				return self::error( 'kwipa_invalid_animation', __( 'Unknown animation preset in timeline step.', 'kwip-animation' ) );
+			}
+
+			$entry = array(
+				'animation' => $animation,
+				'duration'  => self::sanitize_number( isset( $step['duration'] ) ? $step['duration'] : null, 0.6, self::MAX_DURATION ),
+			);
+
+			if ( isset( $step['target'] ) && is_string( $step['target'] ) ) {
+				$target = trim( preg_replace( '/\s+/', ' ', $step['target'] ) );
+				if ( '' !== $target ) {
+					if ( strlen( $target ) > self::MAX_SELECTOR_LEN || false !== strpos( $target, '</' ) || ! preg_match( '/^[\p{L}\p{N}_\-#.>+~:()*\[\]="\'^$|~\\\/ ]+$/u', $target ) ) {
+						return self::error( 'kwipa_invalid_step_target', __( 'Invalid CSS selector in timeline step.', 'kwip-animation' ) );
+					}
+					$entry['target'] = $target;
+				}
+			}
+
+			if ( isset( $step['position'] ) && is_string( $step['position'] ) && '' !== $step['position'] && '>' !== $step['position'] ) {
+				if ( ! preg_match( '/^(>|<|[+-]=\d{1,2}(\.\d{1,2})?)$/', $step['position'] ) ) {
+					return self::error( 'kwipa_invalid_step_position', __( 'Invalid timeline step offset.', 'kwip-animation' ) );
+				}
+				$entry['position'] = $step['position'];
+			}
+
+			if ( isset( $step['ease'] ) && is_string( $step['ease'] ) && '' !== $step['ease'] ) {
+				if ( ! preg_match( KWIPA_Motions::EASE_PATTERN, $step['ease'] ) ) {
+					return self::error( 'kwipa_invalid_ease', __( 'Invalid GSAP easing value.', 'kwip-animation' ) );
+				}
+				$entry['ease'] = $step['ease'];
+			}
+
+			if ( ! empty( $motion['params'] ) && isset( $step['params'] ) && is_array( $step['params'] ) ) {
+				$params = array();
+				foreach ( $motion['params'] as $param => $spec ) {
+					if ( isset( $step['params'][ $param ] ) && is_numeric( $step['params'][ $param ] ) ) {
+						$params[ $param ] = round( min( max( (float) $step['params'][ $param ], $spec['min'] ), $spec['max'] ), 3 );
+					}
+				}
+				if ( $params ) {
+					$entry['params'] = $params;
+				}
+			}
+
+			$clean[] = $entry;
+		}
+
+		return $clean;
 	}
 
 	/**
